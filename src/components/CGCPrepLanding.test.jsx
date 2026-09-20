@@ -1,10 +1,12 @@
+import { useEffect } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Fake LaunchDarkly SDK: `state.flags` is what useFlags() returns, `client` records calls.
-const { state, client, noticeError } = vi.hoisted(() => ({
+const { state, client, noticeError, chatMounted } = vi.hoisted(() => ({
   state: { flags: {} },
   noticeError: vi.fn(),
+  chatMounted: vi.fn(),
   client: {
     on: vi.fn(),
     off: vi.fn(),
@@ -19,7 +21,13 @@ vi.mock('launchdarkly-react-client-sdk', () => ({
   useLDClient: () => client,
 }));
 vi.mock('../observability', () => ({ addPageAction: vi.fn(), noticeError, tagSession: vi.fn() }));
-vi.mock('./AIChatbot', () => ({ default: () => null }));
+// Records each time the chat starts, so a test can tell a fresh chat from the same one carried over.
+vi.mock('./AIChatbot', () => ({
+  default: function ChatSpy({ persona }) {
+    useEffect(() => chatMounted(persona.key), [persona.key]);
+    return null;
+  },
+}));
 
 import CGCPrepLanding from './CGCPrepLanding';
 
@@ -71,6 +79,14 @@ describe('context and metric', () => {
     render(<CGCPrepLanding />);
     fireEvent.change(screen.getByLabelText('Simulate user:'), { target: { value: 'alex-vip' } });
     expect(client.identify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'user', key: 'alex-vip', tier: 'free' }));
+  });
+
+  it('starts a fresh chat when the persona changes, so nobody sees another user\'s conversation', () => {
+    render(<CGCPrepLanding />);
+    expect(chatMounted).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByLabelText('Simulate user:'), { target: { value: 'alex-vip' } });
+    expect(chatMounted).toHaveBeenCalledTimes(2);
+    expect(chatMounted).toHaveBeenLastCalledWith('alex-vip');
   });
 
   it('sends the conversion metric when Start Training is clicked', () => {

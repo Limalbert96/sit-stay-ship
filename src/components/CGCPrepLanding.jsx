@@ -163,7 +163,9 @@ export default function CGCPrepLanding() {
           {flags.examProgressTracker && <ExamTracker />}
 
           {/* AI Config: Model and prompt come from LaunchDarkly via the backend. */}
-          <AIChatbot persona={persona} />
+          {/* key: a different persona starts a fresh conversation, so one user's questions and
+              answers never show up under another user. */}
+          <AIChatbot key={persona.key} persona={persona} />
         </div>
       </main>
     </div>
