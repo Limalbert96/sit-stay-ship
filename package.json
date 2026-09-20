@@ -1,0 +1,49 @@
+{
+  "name": "sit-stay-ship",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "server": "node --env-file-if-exists=.env --import newrelic/esm-loader.mjs --watch server/index.js",
+    "simulate": "node scripts/simulate-traffic.mjs",
+    "build": "vite build",
+    "lint": "oxlint",
+    "test": "vitest run",
+    "preview": "vite preview",
+    "dev:web": "vite",
+    "setup": "node scripts/setup.mjs",
+    "teardown": "node scripts/teardown.mjs",
+    "experiments": "node scripts/experiments.mjs",
+    "ollama": "node scripts/ollama-setup.mjs"
+  },
+  "dependencies": {
+    "@launchdarkly/node-server-sdk": "^9.13.6",
+    "@launchdarkly/server-sdk-ai": "^2.0.6",
+    "@newrelic/browser-agent": "^1.322.0",
+    "express": "^5.2.1",
+    "launchdarkly-react-client-sdk": "^3.9.4",
+    "lucide-react": "^1.47.0",
+    "newrelic": "^14.5.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "jsdom": "^29.1.1",
+    "oxlint": "^1.81.0",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  },
+  "engines": {
+    "node": ">=22.12"
+  },
+  "overrides": {
+    "fflate": "^0.8.3"
+  }
+}

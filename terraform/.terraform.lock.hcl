@@ -1,0 +1,30 @@
+# This file is maintained automatically by "terraform init".
+# Manual edits may be lost in future updates.
+
+provider "registry.terraform.io/launchdarkly/launchdarkly" {
+  version     = "3.1.5"
+  constraints = "~> 3.0"
+  hashes = [
+    "h1:R2j7PBM5MLCic9mJzw29sbvtcMLJHP9fEFhSQPyJS7Q=",
+    "zh:01824cbd819e3fc29e90400a5e7687fcdf7166aab3952446f7a77f8578ecbd74",
+    "zh:155e5f17e73f84800f119764e28244352bfd4158ab1c4714c988c165aa4a2a83",
+    "zh:38c411ae33fd95b93220f780c081f78efce5bdcbad351d2e718aae46fff27c4a",
+    "zh:550cc1fedee25984e0aabf3c6671a814eda4516726835274760e06e7a92c5f04",
+    "zh:5d319d50e17225d97c0278d219b527413e56c9452cb23be5f6bd73d35a75c93c",
+    "zh:62925d7e67565d0736333278fd23985c09e19b60071f52cd60c241c406dc088e",
+    "zh:6ff3faa0c9e865c00e51e250e45405e18891caf33079ce104af072fb04c7a79d",
+    "zh:76cdeaf716cf4a5228e392543066c82e92a54643bf4e438e5308c0a10208b3fd",
+    "zh:77201733040b3b8af13c1c84e393a8d83686faf39cfbeba4ca425cf93d67cd62",
+    "zh:83591752ac3478f8dc64411acb3342a9720f0e3acee317377d473b5826724138",
+    "zh:8b0978bc642da72559d169cbec5def1e6da764d77aa1e458750bdaf6ed55c8dc",
+    "zh:951ba876f9e33ddf406a4140a28dae3fcea368f03b8e0bfb21e18078213d334d",
+    "zh:955db5690ec9650e9267de198b8a9bab735905d768fee5e597aeb94de2550ccf",
+    "zh:aaf8dd64ab74b210db89774a7adaf6d98b727fc1eb8f964a441a310eeadf6617",
+    "zh:adb032f17c69acd3d8d15d2672c62a1b577f11d5a22655da79049b8612398f93",
+    "zh:b01dd6418bda955330a5097973e80a3f85fbdf92839b81d2c5a54fac54b17ddc",
+    "zh:bc70e6b2a7fbeca1449b2209bf3a583e034985783cca4118c8e252bd1a366f61",
+    "zh:c978269e4b8b3c04d942a9d0a07b03c7cbc934c2aa2396dddbed943f3ed996dc",
+    "zh:f809ab383cca0a5f83072981c64208cbd7fa67e986a86ee02dd2c82333221e32",
+    "zh:fd4dee1a2afb54e1caac76ab15afa1dcb895a8df932d6047cc4fe60b1f8e1294",
+  ]
+}
