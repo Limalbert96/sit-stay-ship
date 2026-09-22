@@ -59,6 +59,10 @@ const client = ld.init(sdkKey);
 await client.waitForInitialization({ timeout: 10 });
 const aiClient = isAi ? initAi(client) : null;
 
+// The SDK keeps events in a buffer of 10,000 and drops the overflow. Each simulated user produces
+// several events, so send them in batches; otherwise a large run loses part of its users.
+const FLUSH_EVERY = 200;
+
 const tally = {};
 const record = (arm, converted) => {
   tally[arm] ??= { seen: 0, converted: 0 };
@@ -67,6 +71,7 @@ const record = (arm, converted) => {
 };
 
 for (let i = 0; i < users; i++) {
+  if (i > 0 && i % FLUSH_EVERY === 0) await client.flush();
   const context = {
     kind: 'user',
     key: `sim-${values.target}-user-${i}`,

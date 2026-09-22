@@ -2,7 +2,26 @@
 
 *A LaunchDarkly demo: release a feature, roll it back, target it, test it, and let an AI Config pick the model.*
 
-The demo is built around **CGC Prep Master**, a fictional company that sells prep courses for the AKC **Canine Good Citizen** (CGC) test. This repository is its landing page, a React app with a small Node backend, built to demonstrate LaunchDarkly end to end. It covers releasing and remediating a feature, targeting, experimentation, AI Configs and integrations.
+**The story.** CGC Prep Master is a made-up company that sells online prep courses for the AKC Canine Good Citizen dog test. Its team wants to ship a new "premium videos" feature without the usual risk: test it on a few customers first, turn it off instantly if it breaks, and only roll it out everywhere once the data says it helps. This app is their site, small enough to read in an afternoon, built to show how LaunchDarkly does each of those jobs.
+
+**Why it exists.** It's a hands-on tour of feature flags: not just "on/off", but targeting specific users, running a controlled experiment, and letting an AI chatbot's model and prompt change without a code deploy.
+
+### See it before you run it
+
+| | |
+|---|---|
+| ![The app with the videos released: a demo control bar to switch users, the landing page, and a Premium Video Tutorials card](docs/images/02-release-live.jpg) | ![Results tab of a LaunchDarkly experiment: showing the videos raised conversion from 9.92% to 14.11%, a statistically significant lift](docs/images/14-experiment-flag-result.jpg) |
+| The feature, released and live. Toggling the flag in LaunchDarkly makes the card appear or vanish with no page reload. | The same feature, tested. Half of visitors saw it, half did not; LaunchDarkly measured whether it changed their behaviour. |
+
+More screenshots are further down, next to the section each one belongs to.
+
+### Want to run it yourself?
+
+```bash
+npm install && npm run setup && npm run dev
+```
+
+That's the short version. `npm run setup` walks you through everything it needs (a free LaunchDarkly account and API token); the [checklist right below](#quick-checklist-what-to-run-and-what-to-do-by-hand) has the full detail, including what to do by hand.
 
 | Feature area | What this repo demonstrates | Where to read more |
 |---|---|---|
@@ -56,9 +75,9 @@ If a setup step reports `[!]`, it says what to finish by hand, and [Manual setup
 
 ---
 
-## Feature map: what is built and where to see it
-
-Each capability, with where to see it.
+<a id="feature-map-what-is-built-and-where-to-see-it"></a>
+<details>
+<summary><strong>Feature map: what is built and where to see it</strong> — a reference table matching every capability to the file or screen that shows it. Click to expand.</summary>
 
 ### Basics: SDKs, instructions and code comments
 
@@ -117,6 +136,8 @@ Each capability, with where to see it.
 | Capability | How it is met |
 |---|---|
 | Explore LaunchDarkly integrations for a more compelling demo | **Slack**: every flag change is posted to a channel (UI in 2 minutes, or `--slack-webhook-url`). **Terraform**: the whole LaunchDarkly setup is code (`terraform/`). Optional **New Relic** browser and APM agents. |
+
+</details>
 
 ---
 
@@ -192,6 +213,10 @@ The script prints a summary. Anything marked `[!]` did not complete (for example
 - **Slack** needs your own workspace: pass `--slack-webhook-url`, or see [Integrations](#integrations).
 - **Experiment data.** Setup ends by printing the two `npm run simulate` commands: run them, then read the Results tabs a few minutes later.
 
+The end of a successful setup looks like this:
+
+![Terminal output at the end of npm run setup: models are ready, then the next steps, npm run dev and the two npm run simulate commands](docs/images/07-setup-finished.jpg)
+
 > **Why Terraform for this.** The configuration is declarative and readable (`terraform/main.tf` is the whole LaunchDarkly setup in one file), `terraform plan` previews changes, and re-running it fixes drift instead of duplicating things. The provider has no resource for experiments, so those are created through the API by the script. The Terraform and script calls were checked with `terraform validate` and unit tests against a fake LaunchDarkly, not against a live account; the experiment and AI Config default rule calls (LaunchDarkly's AI Configs API is in beta) are the least certain. If a step reports `[!]`, it says what to finish by hand.
 
 ### 3. Run the app
@@ -200,7 +225,9 @@ The script prints a summary. Anything marked `[!]` did not complete (for example
 npm run dev      # web app on http://localhost:5173 and chat backend on port 3001
 ```
 
-Open <http://localhost:5173>.
+Open <http://localhost:5173>. This is what **Sam** (a free user, targeted by nothing) sees: the feature cards are dark, and the status strip says why ("default rule").
+
+![The app as Sam: the demo bar shows Premium videos OFF (default rule), and only the AI chat card is visible](docs/images/01-app-default-rule.jpg)
 
 > **For the chatbot, Ollama must be running.** `npm run dev` takes care of it: if Ollama is installed but stopped it starts `ollama serve` for the session and stops it again when you press Ctrl-C. An Ollama that was already running (the desktop app, or your own `ollama serve`) is left alone. If you run the pieces separately (`npm run dev:web`, `npm run server`), start Ollama yourself: open the Ollama app, or run `ollama serve` in another terminal. Then wait for `Local models ready` in the chat backend's log before the first message. If Ollama is not running the chatbot still answers, but with canned replies, and the line above the chat says so.
 
@@ -249,9 +276,9 @@ It stops and archives the experiments, runs `terraform destroy` (if Terraform cr
 
 ---
 
-## Manual setup (instead of the script)
-
-Use this if you prefer clicking, or if a script step reported `[!]`.
+<a id="manual-setup-instead-of-the-script"></a>
+<details>
+<summary><strong>Manual setup (instead of the script)</strong> — only needed if you prefer clicking through LaunchDarkly by hand, or a script step reported <code>[!]</code>. Click to expand.</summary>
 
 ### Environment variables (`.env`)
 
@@ -356,6 +383,8 @@ curl -X POST "https://app.launchdarkly.com/api/v2/metrics/default" \
   -d '{"key":"clicked-start-training","name":"clicked-start-training","kind":"custom","eventKey":"clicked-start-training","isNumeric":false,"successCriteria":"HigherThanBaseline"}'
 ```
 
+</details>
+
 ---
 
 ## Tour of the app
@@ -395,6 +424,14 @@ Use a persona who is served `true` (Dana, Maya or Alex) so you can see the card.
 2. Turn targeting **on**. The card appears and the banner reports the change, with **no page reload**.
 3. Turn targeting **off** again. The card disappears instantly. That is the rollback.
 
+Here is what the release looks like for **Maya** (beta), with the banner that proves the page changed live:
+
+![The app as Maya after the flag is turned on: the Premium Video Tutorials card is visible and the banner says the flag changed to ON, no reload needed](docs/images/02-release-live.jpg)
+
+And the rollback, recorded (about 25 seconds: the flag is switched off in LaunchDarkly and the card disappears from the open page with no reload):
+
+![Recording: turning the flag off in LaunchDarkly makes the video card disappear from the open app](docs/images/12-rollback.gif)
+
 ### Remediate a bad release with the trigger
 
 **The situation being simulated:** a new feature ships, it is broken, and it has to be switched off immediately, without a deploy.
@@ -408,6 +445,18 @@ Use a persona who is served `true` (Dana, Maya or Alex) so you can see the card.
    - **From the browser:** click **Fire kill switch** (visible while the bad release is ticked). The page asks the backend to call the trigger for you.
 3. The flag turns off and the broken card disappears for everyone, live. Nothing was deployed.
 4. Restore: turn targeting back on in LaunchDarkly and untick **Simulate a bad release**.
+
+What that looks like, in order. The bad release is contained to one card:
+
+![With Simulate a bad release ticked, the Premium Video Tutorials card says it is temporarily unavailable while the chat still works](docs/images/05-bad-release.jpg)
+
+The kill switch fires and the flag turns off (the page reports it live, and the demo bar reads "flag is off"):
+
+![After Fire kill switch: the demo bar says the kill switch fired, Premium videos is OFF (flag is off) and the card is gone](docs/images/06-kill-switch.jpg)
+
+LaunchDarkly records who or what turned the flag off, here the generic trigger:
+
+![The flag's Monitoring tab in LaunchDarkly: the flag history shows Turned off the flag via Generic trigger](docs/images/06-kill-switch-history.jpg)
 
 **What "via a browser" means.** A trigger can be fired manually, for example with curl or from a browser. A flag trigger is a webhook URL that accepts a **POST** request, and typing the URL into a browser address bar sends a GET, so it does not work on its own. "Via a browser" therefore means sending that request from a browser-based tool or page. Here the **Fire kill switch** button does it: the browser calls `/api/kill-switch` on the backend, which POSTs to the trigger. (Keeping the trigger URL on the server also keeps the secret out of the page.) A web-based REST client works too.
 
@@ -432,17 +481,45 @@ The context is built in [`src/shared/personas.js`](src/shared/personas.js): a `u
 
 Why Sam matters: to prove targeting works you need someone who does *not* match and sees nothing; otherwise "targeted" looks the same as "on for everyone".
 
+The targeting on the flag in LaunchDarkly: the individual target, the tier rule, then (further down) the trial rule that the experiment uses, and the default rule.
+
+![The flag's Targeting tab: one individual target, Alex alex-vip, serving true, and a rule Paying and beta tiers where user tier is one of premium, beta serves true](docs/images/03-flag-targeting1.jpg)
+
+![The rest of the targeting: the Trial users rule with a 50/50 rollout and the experiment attached, then the default rule serving false](docs/images/03-flag-targeting2.jpg)
+
+And what each kind of user sees, with the reason LaunchDarkly gave. **Alex** matches the individual target:
+
+![The app as Alex (free tier): the video card is visible and the status strip says individual target](docs/images/04-app-individual-target.jpg)
+
+**Dana** matches the tier rule:
+
+![The app as Dana (premium tier): the video card is visible and the status strip says targeting rule 1](docs/images/04-app-tier-target.jpg)
+
 ---
 
 ## Experimentation
 
 Targeting decides *who* gets a feature. An experiment decides *whether it is worth releasing*: it randomly splits people into "shown" and "hidden" and measures what they do.
 
-`npm run setup` creates and starts this experiment (and the AI one); `npm run experiments` retries it. The steps below are what it does, for doing it by hand or understanding it.
+`npm run setup` creates and starts this experiment (and the AI one); `npm run experiments` retries it.
 
-**Who is in the experiment.** It runs on its own targeting rule, **"Trial users (experiment audience)"**: `tier` is `trial`, served as a 50/50 rollout. Trial users are the audience the product team wants to test the videos on. Everyone else is unaffected: Sam still gets the dark default, and Alex, Dana and Maya keep their targeting. In the app the experiment personas are **Jo** and **Riley** (both trial). LaunchDarkly hashes each user's key, together with the flag, into one side of the split and keeps the user there, so a persona always gets the same answer: it is sticky, not a coin flip on every page load. Each persona is a coin flip in advance, so Jo and Riley land on opposite sides half of the time. If both see the videos (or both do not), that is normal: the split is 50/50 across many users, not across two. The simulator's 2,000 users show the real balance. The status strip says "targeting rule 3, in an experiment".
+### Before the results: two numbers that look alike but aren't
 
-**Why the Results tab shows almost no users until you run the simulator.** In the app only Jo and Riley are in the experiment, and only once they load the page after it starts. The simulator supplies the volume: its 2,000 synthetic visitors are all trial users. That is expected, not a fault.
+This experiment has two separate numbers in it, and both happen to involve percentages, which is the easy place to mix them up:
+
+1. **The 50/50 split decides who is in which group.** Think of it as a coin flip for each trial user: heads, they see the videos; tails, they don't. This is set up *before* anyone visits the site, and it decides nothing about behaviour, only who ends up in which group. Half of trial users are flipped one way, half the other.
+2. **The lift (for example "+40%") is what we're trying to find out: how much MORE the "heads" group did the thing we care about (clicking Start Training), compared with the "tails" group.** It has nothing to do with the coin flip. It is only known once people in both groups have actually clicked, or not, and LaunchDarkly compares the two groups' click rates.
+
+So "50/50" answers *who is in each group*, and "+40%" answers *did the thing we showed them make a difference*. One is a coin flip we control; the other is a real-world result we are measuring.
+
+**Who is in the experiment.** Only trial users (the split above): everyone else is unaffected, so Sam, Alex, Dana and Maya keep seeing exactly what Targeting says they should. In the app the two trial personas are **Jo** and **Riley**; the status strip shows "targeting rule 3, in an experiment" for both. Each of them is one coin flip, so sometimes both land on the same side, which is normal for two people; the simulator's thousands of synthetic visitors are what shows the real 50/50 balance and produces a result worth reading.
+
+<details>
+<summary>More on the coin-flip mechanics (click to expand)</summary>
+
+LaunchDarkly hashes each user's key, together with the flag, into one side of the split, and keeps the user there: a persona always gets the same answer, so it's sticky, not a coin flip on every page load. That's what makes it a fair test — a person's experience does not change mid-experiment.
+
+</details>
 
 **Hypothesis:** showing the premium video tutorials increases the rate at which trial users click Start Training.
 
@@ -455,31 +532,49 @@ Targeting decides *who* gets a feature. An experiment decides *whether it is wor
    ```
 5. **Read the result** on the experiment's Results tab (LaunchDarkly analyses in 5-minute steps, so allow a few minutes), then decide: release the feature to everyone (default rule `true`) or keep it dark.
 
-**What you should see** (a few minutes after the script finishes): two treatments, `Videos shown` and `Videos hidden` (the baseline), each with its number of users, the conversion rate for `clicked-start-training`, and the difference against the baseline with a confidence interval and a significance indicator. With `--users 2000 --base 0.10 --lift 0.04` expect roughly 14% against 10%, and usually a statistically significant lift for `Videos shown`. Numbers vary a little per run because the simulator is random. **Use 5,000 users, not fewer:** with 2,000 users a real 4-point lift shows up as statistically significant only about 4 runs in 5, and the confidence interval is wide. With 5,000 it is significant in nearly every run and the interval is much tighter.
+**What you should see** (a few minutes after the script finishes): two treatments, `Videos shown` and `Videos hidden` (the baseline), each with its number of users and its click rate on `clicked-start-training`, and a verdict on whether the difference is real. With `--users 5000 --base 0.10 --lift 0.04` expect roughly 14% against 10%. **Use 5,000 users, not fewer:** with only 2,000, a real difference this size is caught only about 4 times in 5; with 5,000 it is caught almost every time.
 
 ### Reading the result: a real example
 
-This is the Results tab after `npm run simulate -- --target flag --users 2000` (default `--base 0.10 --lift 0.04`), about 40 minutes after the experiment started. The simulated conversion rates are chosen by the script, so **the numbers show how to read the tool, not how real visitors behave.**
+This is the experiment after `npm run simulate -- --target flag --users 5000` (the defaults, `--base 0.10 --lift 0.04`). To make the demo meaningful, the simulator secretly bakes in a real effect before it starts: **it makes the "shown" group 40% more likely to click** (about 10 in 100 click without the videos, about 14 in 100 click with them). Nobody tells LaunchDarkly this. The question the experiment answers is: *can it find the planted effect from the click data alone, the same way it would have to for a real feature?* **The numbers below show how to read the tool, not how real visitors behave.**
 
-![Results tab of the experiment "Premium Videos: Start Training Conversion": Videos shown converts at 13.04% against 8.40% for Videos hidden, a relative difference of +55.26%, p-value 0.0073](docs/images/experiment-flag-results.jpg)
+The design, as LaunchDarkly shows it: the hypothesis, the metric, the audience (trial users) and the 50/50 split (this is coin flip #1, deciding who is in which group):
+
+![Design tab of the experiment Premium Videos: Start Training Conversion: hypothesis, primary metric clicked-start-training, audience trial users, a 50/50 split between true and false](docs/images/08-experiment-design-premium-video.jpg)
+
+The result, with the tooltip open on `Videos shown`:
+
+![Results tab: Videos shown converts at 14.11% against 9.92% for Videos hidden, a relative difference of +42.20% with a confidence interval of 19.88% to 64.51% and a p-value of 0.0002](docs/images/14-experiment-flag-result.jpg)
 
 | | Videos hidden (baseline) | Videos shown |
 |---|---|---|
-| Visitors in the experiment | 988 | 1,012 |
-| Clicked Start Training | 8.40% (about 83) | 13.04% (about 132) |
+| Visitors in the experiment | 2,399 | 2,318 |
+| Clicked Start Training | 9.92% (about 238) | 14.11% (about 327) |
 
-What the tooltip says, and what it means for the decision:
+**In plain terms:** about 10 out of every 100 visitors who did not see the videos clicked Start Training. About 14 out of every 100 who did see them clicked. LaunchDarkly's screenshot calls that a **"relative difference" of +42.20%**: going from 10 to 14 clicks per 100 is 42% more clicks than the group without the videos.
 
-- **Relative difference +55.26%.** Showing the videos raised the conversion rate from 8.40% to 13.04%, which is 4.6 percentage points. "Relative" means 13.04 is 55% more than 8.40.
-- **p-value 0.0073, significance level 0.05, "Desired direction".** If the videos did nothing, a gap this large would show up by luck less than 1 time in 100. That is below the 5% bar chosen in advance, so LaunchDarkly calls it statistically significant, and it goes in the direction the hypothesis predicted (more clicks).
-- **Confidence interval [14.87%, 95.66%].** This is the range the true lift most likely lies in. It is wide, because 2,000 visitors is a small sample for a conversion rate near 10%. The important part is that the **whole range is above 0**, so the videos help. How much they help is uncertain: anywhere from about +15% to nearly +96%. (In this run the simulator's real lift is 10% to 14%, which is +40%. The baseline group happened to land a little low, at 8.40%, so the observed +55% overstates it. The true value is inside the interval, as expected.)
-- **Decision.** The result supports releasing the videos to trial users: turn the "Trial users" rule from a 50/50 split into a 100% `true` rollout, then stop the experiment. Expect the real gain to be smaller than +55%, and plan around the low end of the interval.
+**Where did "40%" come from, if the screenshot says 42%?** It's not on the screenshot at all — it's a setting I chose on the simulator script before running it (`--base 0.10 --lift 0.04`: a 10%-without-videos rate, plus 4 more points with them, so 14%). 4 extra points on a 10% base is 40% more, in the same "relative" terms LaunchDarkly uses. So 40% is the effect **I secretly built into the fake data**, and 42.20% is what LaunchDarkly **measured** from the (randomly generated) clicks, without being told the answer. They're close, which is the whole point of this exercise: it shows the tool can find an effect I know is really there.
 
-What this result does **not** tell you, and what a real team would check before going further:
+**What "even the low end" means.** LaunchDarkly doesn't just give one number (42.20%); it gives a range it's confident the true effect falls in: roughly +20% to +65%. "The low end" is that 20% floor — worded as "a fifth" because 20% is one fifth of 100%. Even in the most cautious reading of the data, visitors who saw the videos clicked about a fifth (20%) more often than those who didn't, and that floor is still above zero, which is why the result counts as a real effect and not noise. **The decision:** release the videos to all trial users, and when estimating impact, plan around that cautious ~20% floor rather than the headline 42%.
 
-- **Run length.** A real experiment is sized in advance (how many users are needed to detect the smallest lift you care about), run for whole weeks so weekday and weekend behaviour both count, and **not stopped the first time p drops below 0.05** (checking early inflates false positives). The simulator sends 2,000 users at once, so this run shows the workflow, not a run long enough to trust.
-- **One metric.** A click on Start Training is not a purchase. A fuller experiment would add a guardrail metric (for example refunds, or errors from the new card) to confirm nothing got worse.
-- **Who it covers.** Only trial users were in the experiment, so the result speaks for trial users. Extending it to everyone is a separate decision.
+<details>
+<summary>What "p-value" and "confidence interval" mean, more precisely (click to expand)</summary>
+
+- **p-value (0.0002).** This answers "if the videos truly did nothing, how often would we see a gap this large just from randomness?" Here, about 2 times in 10,000. The bar chosen in advance for "not a fluke" is 1 time in 20 (0.05), so 0.0002 clears it comfortably. LaunchDarkly calls this "statistically significant."
+- **Confidence interval (+19.88% to +64.51%).** A single number like "+42%" hides how much of that could be noise. The interval is the range the *true* lift most likely falls in. Because the whole range is above zero, we can be confident the effect is real, even though we can't pin its exact size — anywhere from a fifth more clicks to nearly two-thirds more would all be consistent with this data.
+- **Why the interval is wide here.** 2,317 or so people is a fairly small sample for a click rate around 10%. A bigger sample (or a longer-running real experiment) narrows the interval.
+- **About the sample sizes shown:** the screenshot counts 4,717 of the 5,000 users sent. An earlier version of the simulator most likely lost some users when the SDK's outgoing-event buffer overflowed; the current version sends events in smaller batches so a run should count everyone. The users that were lost were dropped at random, so the rates above are still valid.
+
+</details>
+
+<details>
+<summary>What this result does <em>not</em> prove, and what a real team would check next (click to expand)</summary>
+
+- **Run length.** A real experiment is sized in advance (how many visitors are needed to detect the smallest lift worth caring about), run for whole weeks so weekday and weekend behaviour both count, and not stopped the moment it first looks significant (checking early inflates false positives). This simulator sends everyone at once, so it shows the workflow, not a run long enough to trust for a real decision.
+- **One metric.** A click on Start Training is not a purchase. A fuller experiment adds a guardrail metric (for example refunds, or errors on the new card) to confirm nothing else got worse.
+- **Who it covers.** Only trial users were in the experiment, so the result speaks for trial users specifically. Extending it to everyone is a separate decision.
+
+</details>
 
 ### The traffic simulator
 
@@ -533,30 +628,52 @@ The script then serves the two variations 50/50 by default and starts the experi
 
 ### Experiment: which prompt and model works best?
 
-**Why different personas get different models.** The default rule splits `Concise` and `Detailed` 50/50 by a hash of the user's key and the flag, so it is random but sticky: a persona keeps its variation, and it does not depend on tier. A different project hashes differently, so which persona gets which model changes between projects. In the app all six personas are exposed as soon as the chat loads (it polls the AI Config), so the experiment shows about six users before any simulation.
+The AI Config in LaunchDarkly holds both variations: each is a prompt plus a model.
 
-`npm run experiments` does all of this for you (the default rule split is already set by `npm run setup`). By hand:
+![The AI Config Canine Coach Chatbot: variation Detailed uses Llama 3.2 3B with a step-by-step system prompt, and variation Concise uses Llama 3.2 1B with a one-or-two-sentence prompt](docs/images/09-ai-config.jpg)
 
-1. Set the AI Config's default rule to a **50/50 percentage rollout** of `Concise` and `Detailed`. Each person gets one, and keeps it, because the split is by user key.
-2. Create an experiment on the AI Config with the custom metric `ai-response-helpful`. Hypothesis: *the detailed prompt on the larger model earns more thumbs-up.* Start it.
+The same question to two users gives two different answers. **Sam** was served `Concise` (the small model, a short reply):
+
+![The chat as Sam: model llama3.2:1b, and a short two-sentence answer to how to practise sit, down and stay](docs/images/10-chat-1b.jpg)
+
+**Dana** was served `Detailed` (the larger model, a step-by-step reply):
+
+![The chat as Dana: model llama3.2:3b, and a long numbered step-by-step answer to the same question](docs/images/10-chat-3b.jpg)
+
+(Which user gets which variation is decided by a hash of their key, so in your project the two may be swapped.)
+
+**Why different personas get different models.** Just like the videos experiment, there's a 50/50 coin flip (which model does this person get?) and, separately, a result we're measuring (did they find the reply helpful?). The coin flip here is a hash of the user's key, so it's random but sticky: a persona keeps its variation every time, and it has nothing to do with `tier`. In the app all six personas are exposed as soon as the chat loads, so you can see both variations without waiting for the simulator.
+
+`npm run experiments` sets this up for you. By hand:
+
+1. Set the AI Config's default rule to a **50/50 percentage rollout** of `Concise` and `Detailed`.
+2. Create an experiment on the AI Config with the custom metric `ai-response-helpful` (a thumbs up). Hypothesis: *the detailed prompt on the larger model earns more thumbs-up.* Start it.
 3. Generate data with real clicks (chat, then click **Yes** or **No**) or the simulator: `npm run simulate -- --target ai --users 2000 --base 0.50 --lift 0.10`.
 
-How it works: clicking **Yes** records `ai-response-helpful` (the AI Config's built-in feedback metric is recorded as well). LaunchDarkly compares, per variation, the share of exposed users who found a reply helpful. In the Results tab expect two treatments with their helpful rate and a significance indicator; with the command above `Detailed` should come out around 60% against 50%.
+**Reading the result: a real example.** This is after `npm run simulate -- --target ai --users 2000 --base 0.50 --lift 0.10`. As with the videos, the simulator secretly plants a real effect before it starts: replies from `Detailed` are marked helpful 60% of the time, against 50% for `Concise`, a 20% lift. The thumbs-up is synthetic, so this shows the workflow, not real users' opinions.
 
-**Reading the result: a real example.** After `npm run simulate -- --target ai --users 1000 --base 0.50 --lift 0.10` (synthetic thumbs-up, so again the workflow and not real users):
+![Design tab of the experiment Canine Coach: Concise vs Detailed Prompt and Model: hypothesis, primary metric ai-response-helpful, a 50/50 split between Detailed and Concise](docs/images/08-experiment-design-canine-coach.jpg)
 
-![Results tab of the experiment "Canine Coach: Concise vs Detailed Prompt and Model": Detailed earns a helpful rate of 56.77% against 45.78% for Concise, a relative difference of +24.00%, p-value 0.0020](docs/images/experiment-ai-results.jpg)
+![Results tab: Detailed is marked helpful 60.07% of the time against 50.00% for Concise, a relative difference of +20.15% with a confidence interval of 6.87% to 33.43% and a p-value of 0.0029](docs/images/14-experiment-ai-result.jpg)
 
 | | Concise (baseline, `llama3.2:1b`) | Detailed (`llama3.2:3b`) |
 |---|---|---|
-| Users | 474 | 532 |
-| Replies marked helpful | 45.78% | 56.77% |
+| Users | 512 | 541 |
+| Replies marked helpful | 50.00% (about 256) | 60.07% (about 325) |
 
-`Detailed` is +24.00% better in relative terms (about 11 percentage points), p = 0.0020, and the confidence interval [8.76%, 39.23%] sits above 0. So the answer to the hypothesis is yes: the detailed prompt on the larger model earns more thumbs-up, and the decision is to make `Detailed` the default (change the AI Config's default rule to 100% `Detailed`) and stop the experiment. Two things to keep in mind:
+**In plain terms:** half of the people who got the short answer said it was helpful; six in ten of the people who got the detailed answer said the same. That's 20% more people finding it helpful, which matches the 20% effect that was planted, so the tool found it correctly. LaunchDarkly's safe range for the true effect is roughly +7% to +33%, never as low as zero, so `Detailed` really is better. **The decision:** make `Detailed` the default, and stop the experiment. Two things to keep in mind before shipping that:
 
 - **Prompt and model changed together.** The experiment shows the *bundle* wins. It cannot say whether the prompt or the larger model did the work. To find out, run a follow-up with one change at a time.
-- **Thumbs-up is not the whole picture.** A larger model is usually slower and costs more. LaunchDarkly AI Configs can track latency and token use too. A real decision weighs the 24% gain against those, so add them as guardrail metrics before rolling out widely.
+- **Thumbs-up is not the whole picture.** A larger model is usually slower and costs more. A real decision weighs the 20% gain against those too.
 
+<details>
+<summary>The same numbers, more precisely (p-value, confidence interval, sample size — click to expand)</summary>
+
+- **p-value 0.0029:** about 3 chances in 1,000 that a gap this size is just luck, well under the 1-in-20 bar for "statistically significant".
+- **Confidence interval +6.87% to +33.43%:** the range the true effect most likely falls in. The whole range is positive.
+- **Sample size:** the screenshot counts 1,053 of the 2,000 users sent, for the same reason as the videos experiment — an earlier version of the simulator could lose events under load. The rates shown are still valid; see the [videos experiment](#reading-the-result-a-real-example) for the full explanation.
+
+</details>
 
 ### Questions to ask the chatbot
 
@@ -576,12 +693,28 @@ If the AI Config is switched off, the chatbot shows "Assistant is switched off".
 
 It needs a Slack workspace you control, so it cannot ship inside this repo.
 
+What a flag change looks like in the Slack channel (names hidden), including the trigger firing:
+
+![Slack channel showing LaunchDarkly messages: the subscription to flag updates, and a message that the flag Premium Video Tutorials was turned off via a generic trigger](docs/images/11-slack-message.jpg)
+
 ### New Relic (optional): browser and APM agents
 
 `npm run setup` does not set up New Relic: you create the account and the Browser and APM applications yourself and add their values to `.env` (they are commented out in `.env.example`; with none set, both agents stay off and the app runs normally).
 
 1. **Browser agent (the React app).** In New Relic add a Browser application and copy the IDs into `.env` (`NR_ACCOUNT_ID`, `NR_BROWSER_APP_ID`, `NR_BROWSER_LICENSE_KEY`). [`src/observability.js`](src/observability.js) starts the agent, tags sessions with the user and the current flag value, and reports errors caught by the flag boundary (try **Simulate a bad release**). Confirm it under Browser monitoring; you can query `SELECT * FROM JavaScriptError WHERE appName = 'Canine Good Citizen'`.
 2. **APM agent (the Node backend).** Copy the APM license key into `.env` as `NR_APM_LICENSE_KEY` (also `NR_APM_APP_NAME`, `NR_APM_AIM_ENABLED`). `npm run server` preloads the agent through `newrelic.cjs`; without a key it stays disabled. Each chat request carries the persona and the model LaunchDarkly picked as custom attributes.
+
+What it shows, after some bad-release clicks. The browser agent reports the errors the bad release causes (top errors: "Failed to construct 'URL'"), grouped by session and user:
+
+![New Relic browser summary: 11 sessions, JavaScript error rate over time, and top errors led by Failed to construct URL](docs/images/13-nr-browser.jpg)
+
+Session replay lets you watch the session in which the error happened (text is masked, so typed chat text never leaves the browser):
+
+![New Relic session replay of the user sam-free, with the JavaScript error Failed to construct URL marked on the timeline](docs/images/13-nr-session-replay.jpg)
+
+The APM agent reports the Node backend:
+
+![New Relic APM summary for the Canine Good Citizen service: throughput, errors and transactions](docs/images/13-nr-apm.jpg)
 
 LaunchDarkly also offers a New Relic integration that writes flag changes to New Relic as deployment markers. It was tried and no events arrived in the current New Relic, which appears to have retired the API it relies on, so it is not used here.
 
@@ -626,18 +759,19 @@ One company, four hats. Keep the app and the LaunchDarkly project (`cgc-test`, e
 
 *The situation: the team shipped the videos. Do they raise the number of trial users who click Start Training?*
 
-1. Pick **Jo**, then **Riley** (both trial). The strip says "targeting rule 3, in an experiment" for each. Usually one sees the videos and the other does not; sometimes both land on the same side, because each user's side is fixed by a hash of their key. *Say:* "Trial users are the experiment: LaunchDarkly puts each one on a side of a 50/50 split and keeps them there. Sam, Alex, Dana and Maya are unaffected, which keeps the test clean."
-2. Open the experiment `premium-videos-start-training` in LaunchDarkly: the hypothesis, the metric `clicked-start-training` and the 50/50 split.
-3. Open its **Results** tab (the data came from `npm run simulate -- --target flag --users 2000`: a trial has no real traffic, so it sends 2,000 synthetic trial users marked `synthetic: true`; the lift is a parameter I chose, so the numbers show the workflow, not real behaviour). Point out conversion per treatment, lift and significance (expect about 14% for `Videos shown` against 10% for `Videos hidden`; [a real run](#reading-the-result-a-real-example) is in the README). *Say:* "This is where the PM decides: release to everyone, or don't."
+1. **Set the scene.** Pick **Jo**, then **Riley** (both trial): the strip says "targeting rule 3, in an experiment". *Say:* "We shipped premium videos. Trial users are split 50/50, videos or not, and I want to know if it changes what they do. Sam, Alex, Dana and Maya are unaffected, which keeps the test clean."
+2. **Show the design.** Open the experiment `premium-videos-start-training`, Design tab. *Say:* "One metric: did they click Start Training. Since a trial has no real traffic, I sent 5,000 fake visitors and secretly planted a 40% lift, to check LaunchDarkly can find it."
+3. **Show the result.** Open Results, hover `Videos shown`. *Say:* "9.9 in 100 clicked without the videos, 14.1 with them — that's 42% more clicks, which is close to the 40% I planted, so the tool works. The p-value is 0.0002: if the videos changed nothing, a gap this big happens by chance about 2 times in 10,000. And LaunchDarkly's range for the true effect never dips below zero, so this isn't noise."
+4. **Decide, with a caveat.** *Say:* "I'd release to all trial users and plan around the cautious end of that range, closer to 20% than 42%. But this is fake data and one metric — a real test runs for weeks and watches a guardrail metric too, like refunds."
 
 ### Act 4: AI product manager, "which prompt and model?" (AI Config, 4 minutes)
 
 *The situation: a support chatbot. You want to change its model and prompt without shipping code, and find the best configuration.*
 
-1. Pick a persona and ask "How do I teach loose leash walking?". The line above the chat names the model (for example `llama3.2:3b`, running locally with Ollama), and the answer follows that variation's prompt.
-2. In LaunchDarkly open the AI Config `canine-coach-chatbot`, Targeting, and add an individual target for your persona serving the other variation. Within about 3 seconds the model line changes; ask again and the style changes (short and direct vs step by step). *Say:* "Changing the model or the prompt is a click, not a deploy."
-3. Click **Yes** or **No** under replies. *Say:* "Each **Yes** is a metric, `ai-response-helpful`."
-4. Run `npm run simulate -- --target ai --users 2000`, and open the experiment `canine-coach-prompt-model` a few minutes later: which variation earns more thumbs-up. Remove your individual target when done.
+1. **Set the scene.** Pick a persona, ask "How do I teach loose leash walking?". The line above the chat names the model. *Say:* "Model and prompt both come from LaunchDarkly, not the code."
+2. **Show it changing live.** In the AI Config `canine-coach-chatbot`, Targeting, add an individual target for your persona serving the other variation. Ask again within about 3 seconds: the model and the answer's style both change. *Say:* "That's a click, not a deploy." Remove the target after.
+3. **Show the design.** Click **Yes** or **No** under a reply. *Say:* "Each Yes is the metric `ai-response-helpful`. I sent 2,000 fake users and planted a 20% lift for the detailed prompt, same idea as the videos test."
+4. **Show the result and decide.** Open the experiment `canine-coach-prompt-model`, Results tab. *Say:* "Half the short-answer group found it helpful, six in ten of the detailed group did — 20% more, matching what I planted. p = 0.003, range +7% to +33%, never zero. I'd make Detailed the default. The catch: prompt and model changed together, so I can't say which one did the work."
 
 ### Act 5: Integrations (throughout)
 
@@ -651,7 +785,7 @@ If Slack is connected, keep the channel visible during Acts 1 to 4: every toggle
 npm test
 ```
 
-59 tests (Vitest, React Testing Library) covering:
+67 tests (Vitest, React Testing Library) covering:
 - **Release and remediate behaviour** (`CGCPrepLanding.test.jsx`): the flag gates the feature, the change listener subscribes and unsubscribes, re-identify with a stable persona key, the conversion metric, the bad-release switch with the error boundary, and the kill switch button.
 - **Flag explanations** (`FlagStatus.test.jsx`, `flagReason.js`).
 - **Model selection** (`server/llm.test.js`): OpenAI, Ollama, canned fallback, the local model mapping and warm-up. **Setup and teardown** (`scripts/setup-lib.test.js`): `.env` merging, Terraform output handling, and every LaunchDarkly API call for experiments and clean-up, against a fake server; the API token checks (`scripts/token.test.js`). The Terraform config is checked with `terraform validate`.

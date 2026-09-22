@@ -43,3 +43,6 @@ crash.log
 # Personal hand-outs (not part of the repo)
 one-pager.html
 one-pager.pdf
+
+# Screen recording source (the README uses the GIF made from it)
+docs/images/*.mov

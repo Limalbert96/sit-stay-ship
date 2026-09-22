@@ -81,6 +81,39 @@ describe('context and metric', () => {
     expect(client.identify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'user', key: 'alex-vip', tier: 'free' }));
   });
 
+  it('shows the reason for the newly chosen persona once the context has changed', async () => {
+    // Like the real SDK: reasons belong to the context set by the last identify().
+    const context = { key: 'sam-free' };
+    client.identify.mockImplementationOnce(async (next) => {
+      await new Promise((resolve) => setTimeout(resolve, 0)); // the real SDK answers over the network
+      context.key = next.key;
+    });
+    client.variationDetail.mockImplementation(() => (
+      context.key === 'alex-vip'
+        ? { value: true, reason: { kind: 'TARGET_MATCH' } }
+        : { value: true, reason: { kind: 'RULE_MATCH', ruleIndex: 0 } }
+    ));
+    render(<CGCPrepLanding />);
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Simulate user:'), { target: { value: 'alex-vip' } });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    expect(screen.getByLabelText('Flag status')).toHaveTextContent('Premium videos: ON (individual target)');
+    client.variationDetail.mockImplementation(() => ({ value: false, reason: { kind: 'FALLTHROUGH' } }));
+  });
+
+  it('does not announce a persona switch as a live flag change', async () => {
+    render(<CGCPrepLanding />);
+    const [, handler] = client.on.mock.calls[0];
+    client.identify.mockImplementationOnce(async () => { handler(true); });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Simulate user:'), { target: { value: 'maya-beta' } });
+    });
+    expect(screen.queryByText(/changed to/)).not.toBeInTheDocument();
+    act(() => handler(false));
+    expect(screen.getByRole('status')).toHaveTextContent('changed to OFF');
+  });
+
   it('starts a fresh chat when the persona changes, so nobody sees another user\'s conversation', () => {
     render(<CGCPrepLanding />);
     expect(chatMounted).toHaveBeenCalledTimes(1);

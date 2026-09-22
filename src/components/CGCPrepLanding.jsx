@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useFlags, useLDClient } from 'launchdarkly-react-client-sdk';
 import { ShieldCheck, Target, Award, Users } from 'lucide-react';
 import PremiumVideos from './PremiumVideos';
@@ -24,6 +24,11 @@ export default function CGCPrepLanding() {
   // Demo only: makes the premium videos throw, like a bad release (see PremiumVideos.jsx).
   const [badRelease, setBadRelease] = useState(chaosFromUrl);
   const [killMessage, setKillMessage] = useState('');
+  // Counts finished identify() calls. Switching persona changes the LaunchDarkly context, and the
+  // reasons shown in the status strip belong to that context, so the strip is rebuilt once it is set.
+  const [identifiedCount, setIdentifiedCount] = useState(0);
+  // True while a persona switch is being applied, so it is not announced as a live flag change.
+  const switching = useRef(false);
 
   const showPremiumVideos = Boolean(flags.premiumVideoTutorials);
 
@@ -33,6 +38,7 @@ export default function CGCPrepLanding() {
   useEffect(() => {
     if (!ldClient) return undefined;
     const onChange = (value) => {
+      if (switching.current) return;
       setNotice(`Flag "${PREMIUM_VIDEOS_FLAG}" changed to ${value ? 'ON' : 'OFF'} at ${new Date().toLocaleTimeString()}. No reload needed.`);
     };
     ldClient.on(`change:${PREMIUM_VIDEOS_FLAG}`, onChange);
@@ -49,7 +55,15 @@ export default function CGCPrepLanding() {
     const next = findPersona(e.target.value);
     setPersona(next);
     setTrainingStarted(false);
-    if (ldClient) await ldClient.identify(toContext(next));
+    setNotice(null);
+    if (!ldClient) return;
+    switching.current = true;
+    try {
+      await ldClient.identify(toContext(next));
+    } finally {
+      switching.current = false;
+    }
+    setIdentifiedCount((n) => n + 1);
   };
 
   // Remediate from the browser: asks the backend to fire the flag trigger (server/index.js).
@@ -100,7 +114,7 @@ export default function CGCPrepLanding() {
             </>
           )}
         </div>
-        <FlagStatus persona={persona} />
+        <FlagStatus key={identifiedCount} persona={persona} />
         {notice && (
           <div role="status" className="demo-bar-notice">
             {notice}
