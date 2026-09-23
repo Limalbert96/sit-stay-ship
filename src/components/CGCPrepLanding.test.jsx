@@ -147,6 +147,19 @@ describe('simulate a bad release', () => {
     expect(screen.getByText('Premium Video Tutorials')).toBeInTheDocument();
   });
 
+  it('unchecks the bad-release switch when the flag turns back on, so the demo can be re-run without an extra step', () => {
+    render(<CGCPrepLanding />);
+    fireEvent.click(screen.getByLabelText('Simulate a bad release'));
+    expect(screen.getByLabelText('Simulate a bad release')).toBeChecked();
+
+    const [, handler] = client.on.mock.calls[0];
+    act(() => handler(false)); // the kill switch turned it off
+    expect(screen.getByLabelText('Simulate a bad release')).toBeChecked(); // turning off does not clear it
+
+    act(() => handler(true)); // restored in LaunchDarkly
+    expect(screen.getByLabelText('Simulate a bad release')).not.toBeChecked();
+  });
+
   it('offers a kill switch button that calls the backend, only while the release is bad', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ fired: true }) });
     vi.stubGlobal('fetch', fetchMock);

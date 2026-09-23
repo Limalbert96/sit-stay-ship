@@ -40,6 +40,10 @@ export default function CGCPrepLanding() {
     const onChange = (value) => {
       if (switching.current) return;
       setNotice(`Flag "${PREMIUM_VIDEOS_FLAG}" changed to ${value ? 'ON' : 'OFF'} at ${new Date().toLocaleTimeString()}. No reload needed.`);
+      // The flag turning back on (kill switch restored, or toggled on in LaunchDarkly) is a fresh
+      // start: uncheck "Simulate a bad release" so the card does not immediately break again and
+      // the next demo run does not need that extra manual step.
+      if (value) setBadRelease(false);
     };
     ldClient.on(`change:${PREMIUM_VIDEOS_FLAG}`, onChange);
     return () => ldClient.off(`change:${PREMIUM_VIDEOS_FLAG}`, onChange);
