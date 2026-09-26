@@ -35,5 +35,8 @@ export function toContext(persona) {
     key: persona.key,
     name: persona.name,
     tier: persona.tier,
+    // Synthetic visitors come from scripts/simulate-incident.mjs, never from a real person, and are
+    // marked so they can be told apart from real traffic in LaunchDarkly.
+    ...(persona.synthetic && { synthetic: true }),
   };
 }

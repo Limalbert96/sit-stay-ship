@@ -4,6 +4,7 @@ import './observability.js';
 import './index.css';
 import App from './App.jsx';
 import { DEFAULT_PERSONA, toContext } from './shared/personas.js';
+import { personaFromUrl } from './chaos.js';
 
 // LaunchDarkly CLIENT-SIDE ID (safe to expose in the browser; NOT the server SDK key).
 // Set LD_CLIENT_ID in .env. Find it in
@@ -20,7 +21,8 @@ const LD_CLIENT_ID = import.meta.env.LD_CLIENT_ID || 'PLACEHOLDER_CLIENT_ID';
       // are pushed to the browser and useFlags() re-renders without a reload.
       LDProvider = await asyncWithLDProvider({
         clientSideID: LD_CLIENT_ID,
-        context: toContext(DEFAULT_PERSONA),
+        // ?persona= or ?visitor= in the URL opens the page as that user (demo only, see chaos.js).
+        context: toContext(personaFromUrl() ?? DEFAULT_PERSONA),
         // Lets the page explain why each flag value was served (see FlagStatus.jsx).
         options: { evaluationReasons: true },
       });

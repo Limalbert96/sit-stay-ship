@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useFlags, useLDClient } from 'launchdarkly-react-client-sdk';
 import { ShieldCheck, Target, Award, Users } from 'lucide-react';
 import PremiumVideos from './PremiumVideos';
-import { chaosFromUrl } from '../chaos';
+import { chaosFromUrl, personaFromUrl } from '../chaos';
 import ExamTracker from './ExamTracker';
 import AIChatbot from './AIChatbot';
 import FlagBoundary from './FlagBoundary';
@@ -18,7 +18,7 @@ const PREMIUM_VIDEOS_FLAG = 'premium-video-tutorials';
 export default function CGCPrepLanding() {
   const flags = useFlags();
   const ldClient = useLDClient();
-  const [persona, setPersona] = useState(DEFAULT_PERSONA);
+  const [persona, setPersona] = useState(() => personaFromUrl() ?? DEFAULT_PERSONA);
   const [notice, setNotice] = useState(null);
   const [trainingStarted, setTrainingStarted] = useState(false);
   // Demo only: makes the premium videos throw, like a bad release (see PremiumVideos.jsx).
@@ -102,7 +102,7 @@ export default function CGCPrepLanding() {
             <Users size={18} color="var(--text-muted)" />
             <label htmlFor="persona" style={{ fontSize: '0.875rem', fontWeight: 500 }}>Simulate user:</label>
             <select id="persona" value={persona.key} onChange={handleContextChange} style={{ padding: '0.4rem', fontSize: '0.875rem' }}>
-              {PERSONAS.map((p) => (
+              {(PERSONAS.some((p) => p.key === persona.key) ? PERSONAS : [persona, ...PERSONAS]).map((p) => (
                 <option key={p.key} value={p.key}>{`${p.name} (${p.tier})`}</option>
               ))}
             </select>
