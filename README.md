@@ -135,7 +135,7 @@ If a setup step reports `[!]`, it says what to finish by hand, and [Manual setup
 
 | Capability | How it is met |
 |---|---|
-| Explore LaunchDarkly integrations for a more compelling demo | **Slack**: every flag change is posted to a channel (UI in 2 minutes, or `--slack-webhook-url`). **Terraform**: the whole LaunchDarkly setup is code (`terraform/`). Optional **New Relic** browser and APM agents. |
+| Explore LaunchDarkly integrations for a more compelling demo | **Slack**: every flag change is posted to a channel (UI in 2 minutes, or `--slack-webhook-url`). **Terraform**: the whole LaunchDarkly setup is code (`terraform/`). Optional **New Relic** browser and APM agents, plus flag changes written to New Relic as change-tracking markers. |
 
 </details>
 
@@ -271,6 +271,7 @@ It stops and archives the experiments, runs `terraform destroy` (if Terraform cr
 | `npm run experiments` | Creates and starts the two experiments (setup does this; use it to retry) |
 | `npm run teardown` | Removes what setup created (above) |
 | `npm run simulate -- --target flag\|ai --users N` | Generates synthetic experiment traffic ([details](#the-traffic-simulator)) |
+| `npm run incident` | Plays out a whole bad-release incident for the New Relic charts ([details](#new-relic-optional-browser-and-apm-agents)) |
 | `npm test` | Runs the unit tests (Vitest) |
 | `npm run lint` / `npm run build` | Lint and production build |
 
@@ -396,6 +397,7 @@ Open <http://localhost:5173>.
 | **Demo controls bar** (top of the page) | Tooling for presenting, kept apart from the site below it: the user switch, the bad-release switch and kill switch, the flag status, and change banners. A real site would not have it. |
 | **Simulate user** dropdown | Switches persona. The app re-identifies with a new LaunchDarkly context (same stable key each time) and every flag is re-evaluated for that person. |
 | **Simulate a bad release** checkbox | Demo only (release and remediate). Makes the Premium Video card throw, like a buggy deploy. Also available as the URL `/?chaos=1`. |
+| **Demo URL switches** | `?chaos=1` opens with the bad release already on, `?persona=maya-beta` opens as one of the personas, and `?visitor=shopper-07` opens as a synthetic premium customer (what `npm run incident` drives). See [`src/chaos.js`](src/chaos.js). |
 | **Fire kill switch** button | Appears in the demo bar while *Simulate a bad release* is ticked. Asks the backend to call the flag trigger. |
 | **Flag status strip** | Always visible in the demo bar. Shows who you are viewing as, and what each flag serves them and why: *individual target*, *targeting rule 1*, *default rule*, *default rule, in an experiment*, or *flag is off*. |
 | **Change banner** | Appears when a flag changes while the page is open: "Flag ... changed to OFF at ... No reload needed." |
@@ -716,7 +718,41 @@ The APM agent reports the Node backend:
 
 ![New Relic APM summary for the Canine Good Citizen service: throughput, errors and transactions](docs/images/13-nr-apm.jpg)
 
-LaunchDarkly also offers a New Relic integration that writes flag changes to New Relic as deployment markers. It was tried and no events arrived in the current New Relic, which appears to have retired the API it relies on, so it is not used here.
+3. **Change tracking: flag changes as markers on both entities** (needs `NR_API_KEY`). LaunchDarkly ships a New Relic integration meant to do exactly this, but it posts to an API New Relic has retired: it was tried here and no events ever arrived. [`server/changeTracking.js`](server/changeTracking.js) is the workaround, and it needs no integration at all.
+
+   The backend already holds a LaunchDarkly server SDK connection, and the SDK raises an event whenever a flag is edited — from the LaunchDarkly UI, the REST API, or the kill-switch trigger. On each one the backend calls New Relic's NerdGraph API itself and writes a **change tracking event of category `FEATURE_FLAG`**, once against the **APM** entity and once against the **Browser** entity. Both are needed: New Relic attaches markers per entity, so a marker on the backend service does not appear on the browser charts. With both, the "flag turned off" marker lines up with the error spike on whichever chart you are showing.
+
+   To switch it on, add a New Relic **user key** to `.env` as `NR_API_KEY` (profile menu, API keys, Create key, type **User**; the license and browser keys above cannot call NerdGraph). The backend finds the two entities by `NR_APM_APP_NAME`, or you can name them outright with `NR_APM_ENTITY_GUID` and `NR_BROWSER_ENTITY_GUID`. On start it logs `New Relic change tracking on`, then a line per flag change; anything that fails only warns, so a demo never depends on New Relic being reachable. To see the markers: open the APM or Browser entity, then **Change tracking** (or the markers on any chart), and toggle a flag.
+
+   Each marker says what actually happened, so it reads on its own on a chart: `premium-video-tutorials turned ON`, `turned OFF`, or `turned OFF by the kill switch` when the trigger caused it. The flag key, its new state, the trigger, project, environment and `source: sit-stay-ship` ride along as custom attributes:
+
+   ```sql
+   SELECT shortDescription, flagState, trigger FROM ChangeTrackingEvent WHERE source = 'sit-stay-ship' SINCE 1 day ago
+   ```
+
+   **The whole incident on one chart.** Clicking through it by hand gives one session and a thin chart, so [`scripts/simulate-incident.mjs`](scripts/simulate-incident.mjs) plays out the incident properly, with real customers and real time between the steps:
+
+   ```bash
+   npm run dev          # in one terminal
+   npm run incident     # in another: about 10 minutes
+   ```
+
+   | Step | What happens |
+   |---|---|
+   | 1. Release | The flag is turned **on**. A `turned ON` marker lands on both entities. |
+   | 2. Calm | A few customers browse the working page, so the chart has a healthy "before". |
+   | 3. Bad release | A dozen customers meet the broken card and **rage-click** it, spread over a minute. |
+   | 4. It burns | The feature stays on for a few minutes, the way a real incident waits to be noticed — long enough for an alert to fire. |
+   | 5. Remediate | The **kill switch** fires. A `turned OFF by the kill switch` marker lands. |
+   | 6. Recovery | More customers arrive to a working page, so the chart shows traffic without errors. |
+
+   The customers are real browser sessions: each is a separate headless Chrome with its own profile, so New Relic counts a distinct session and a distinct user, and the clicks are real mouse events, so they register as rage clicks and frustration signals. **Nothing is faked into New Relic** — the telemetry comes from the app's own browser agent, exactly as it would from a person. The visitors themselves are synthetic (premium-tier `shopper-NN`, marked `synthetic: true` in LaunchDarkly, and premium so they stay out of the trial-users experiment).
+
+   **The alert.** With an alert condition on rage clicks (`SELECT count(*) FROM UserAction WHERE rageClick = true FACET appName, enduser.id`), step 3 opens a real New Relic issue while the flag is still on, and step 5 is the fix. That is the whole loop an SE is asked about: ship, detect, remediate without a deploy.
+
+   Timings are adjustable: `npm run incident -- --users 20 --calm 30 --detect 60`, and `--dry-run` prints the plan without touching anything. It needs `LD_API_TOKEN` and `LD_TRIGGER_URL` in `.env`, plus Chrome (`CHROME=/path/to/chrome` if it is not in the usual place).
+
+   ![New Relic browser summary during the simulated incident: JavaScript errors climb while a dozen customers rage-click the broken card, then a "premium-video-tutorials turned OFF by the kill switch" marker lands and the errors stop](docs/images/15-incident-timeline.jpg)
 
 ---
 
@@ -775,7 +811,11 @@ One company, four hats. Keep the app and the LaunchDarkly project (`cgc-test`, e
 
 ### Act 5: Integrations (throughout)
 
-If Slack is connected, keep the channel visible during Acts 1 to 4: every toggle, target change and trigger firing is posted there with who did it. *Say:* "That is how the rest of the team sees what changed." Finish with `terraform/main.tf`: "Everything you saw was created from code, in one command."
+If Slack is connected, keep the channel visible during Acts 1 to 4: every toggle, target change and trigger firing is posted there with who did it. *Say:* "That is how the rest of the team sees what changed."
+
+If New Relic is connected, have the [incident chart](#new-relic-optional-browser-and-apm-agents) open from an earlier `npm run incident` run: the error spike across a dozen customers, the alert, and the `turned OFF by the kill switch` marker where it stops. *Say:* "Same story as Act 1, but as the on-call engineer would have seen it."
+
+Finish with `terraform/main.tf`: "Everything you saw was created from code, in one command."
 
 ---
 
@@ -785,10 +825,10 @@ If Slack is connected, keep the channel visible during Acts 1 to 4: every toggle
 npm test
 ```
 
-67 tests (Vitest, React Testing Library) covering:
+76 tests (Vitest, React Testing Library) covering:
 - **Release and remediate behaviour** (`CGCPrepLanding.test.jsx`): the flag gates the feature, the change listener subscribes and unsubscribes, re-identify with a stable persona key, the conversion metric, the bad-release switch with the error boundary, and the kill switch button.
 - **Flag explanations** (`FlagStatus.test.jsx`, `flagReason.js`).
-- **Model selection** (`server/llm.test.js`): OpenAI, Ollama, canned fallback, the local model mapping and warm-up. **Setup and teardown** (`scripts/setup-lib.test.js`): `.env` merging, Terraform output handling, and every LaunchDarkly API call for experiments and clean-up, against a fake server; the API token checks (`scripts/token.test.js`). The Terraform config is checked with `terraform validate`.
+- **Model selection** (`server/llm.test.js`): OpenAI, Ollama, canned fallback, the local model mapping and warm-up. **New Relic change tracking** (`server/changeTracking.test.js`): the entity lookup and caching, the FEATURE_FLAG event it builds, and the errors NerdGraph returns with status 200. **Setup and teardown** (`scripts/setup-lib.test.js`): `.env` merging, Terraform output handling, and every LaunchDarkly API call for experiments and clean-up, against a fake server; the API token checks (`scripts/token.test.js`). The Terraform config is checked with `terraform validate`.
 - Personas, environment handling, and the canned replies.
 
 ---
@@ -840,6 +880,7 @@ vite.config.js                dev server, API proxy, whitelist of browser-visibl
 server/
   index.js                    chat backend: AI Config, metrics, kill switch
   llm.js                      OpenAI / Ollama / canned reply selection, model warm-up
+  changeTracking.js           marks flag changes on the New Relic entities (optional)
   mockLlm.js                  canned replies
   env.js                      loads .env
 scripts/
@@ -850,6 +891,7 @@ scripts/
   dev.mjs                     npm run dev (app, backend, and Ollama if needed)
   ollama.mjs, ollama-setup.mjs  install, start and feed Ollama (npm run ollama)
   simulate-traffic.mjs        synthetic experiment traffic
+  simulate-incident.mjs       plays out a bad release: real browser sessions, rage clicks, kill switch
 src/
   main.jsx                    LaunchDarkly provider (streaming, evaluation reasons)
   observability.js            New Relic browser agent

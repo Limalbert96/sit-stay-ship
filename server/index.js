@@ -17,6 +17,7 @@ import { initAi, LDFeedbackKind } from '@launchdarkly/server-sdk-ai';
 import { findPersona, toContext } from '../src/shared/personas.js';
 import { sdkKey } from './env.js';
 import { generateReply, resolveProvider, warmUp } from './llm.js';
+import { changeTrackingEnabled, recordFlagChange } from './changeTracking.js';
 
 const PORT = Number(process.env.PORT ?? 3001);
 // Server-side SDK key (LD_SDK_KEY in .env).
@@ -42,6 +43,45 @@ if (SDK_KEY) {
   aiClient = initAi(ldClient);
 } else {
   console.warn('No LD_SDK_KEY in .env: using the local fallback config, no metrics are sent.');
+}
+
+// Optional (Integrations): mark every flag change on the New Relic APM and Browser entities, which
+// is what LaunchDarkly's own New Relic integration would do if its API still worked. The SDK raises
+// "update" whenever a flag is edited in LaunchDarkly, from the UI, the API or the kill-switch
+// trigger. Failures only warn: a demo must not depend on New Relic being reachable.
+
+// The "update" event carries only the flag key, so the resulting on/off state is read back here.
+// allFlagsState is the one call that reports it without sending analytics events, so reading it
+// does not add a fake user to the flag's evaluations. The reason kind is "OFF" only when the flag's
+// own switch is off, which is what a marker should say, whatever the targeting rules serve.
+const PROBE_CONTEXT = { kind: 'user', key: 'sit-stay-ship-change-tracking', anonymous: true };
+async function flagState(key) {
+  try {
+    const state = await ldClient.allFlagsState(PROBE_CONTEXT, { withReasons: true });
+    const reason = state.getFlagReason(key);
+    if (!reason) return undefined;
+    return reason.kind === 'OFF' ? 'off' : 'on';
+  } catch {
+    return undefined; // a marker without the state still beats no marker
+  }
+}
+
+// Set when the page fires the kill switch, so the flag change that follows a second later can be
+// labelled as the kill switch rather than as someone editing a flag.
+let killSwitchFiredAt = 0;
+const KILL_SWITCH_WINDOW_MS = 20_000;
+
+if (ldClient && changeTrackingEnabled()) {
+  console.log('New Relic change tracking on: flag changes will be marked on the APM and Browser entities.');
+  ldClient.on('update', async ({ key }) => {
+    const state = await flagState(key);
+    const viaKillSwitch = state === 'off' && Date.now() - killSwitchFiredAt < KILL_SWITCH_WINDOW_MS;
+    recordFlagChange(key, { state, viaKillSwitch })
+      .then(({ marked }) => console.log(
+        `Marked "${key}" ${state ? `turned ${state.toUpperCase()}` : 'changed'}${viaKillSwitch ? ' (kill switch)' : ''} on New Relic (${marked.join(' and ')}).`,
+      ))
+      .catch((err) => console.warn(`Could not mark "${key}" on New Relic: ${err.message}`));
+  });
 }
 
 async function loadConfig(persona) {
@@ -126,16 +166,33 @@ app.post('/api/kill-switch', async (_req, res) => {
   if (!url) return res.status(501).json({ error: 'LD_TRIGGER_URL is not set in .env' });
   try {
     const result = await fetch(url, { method: 'POST' });
+    if (result.ok) killSwitchFiredAt = Date.now(); // labels the flag change this causes (see above)
     res.status(result.ok ? 200 : 502).json({ fired: result.ok, status: result.status });
   } catch {
     res.status(502).json({ fired: false, error: 'could not reach LaunchDarkly' });
   }
 });
 
-app.listen(PORT, () => {
+// Bound to localhost on purpose: this is a local demo backend, and /api/kill-switch has no
+// authentication, so it should not be reachable from the rest of the network. It also keeps the
+// "port in use" error below clean, because a dual-stack bind can half-succeed before it fails.
+const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`Chat backend listening on http://localhost:${PORT}`);
   warmUp().then((models) => {
     if (models.length) console.log(`Local models ready: ${models.join(', ')}`);
     else console.warn('No local models found. For real chatbot replies start Ollama (`ollama serve`) and run `ollama pull llama3.2:1b llama3.2:3b`. Until then the chatbot uses canned replies.');
   });
+});
+
+// A second copy of the backend is worse than none: it cannot serve the API, but it still holds a
+// LaunchDarkly connection, so every flag change would be marked in New Relic twice. Stop instead.
+server.on('error', async (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${PORT} is already in use, so the chat backend is already running. Stopping this second copy.
+Use the one that is running, or start this one on another port with PORT=3002 npm run server.`);
+  } else {
+    console.error('The chat backend could not start:', err.message);
+  }
+  await ldClient?.close();
+  process.exit(1);
 });
