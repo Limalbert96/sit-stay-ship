@@ -126,8 +126,11 @@ resource "launchdarkly_feature_flag_environment" "premium_video_tutorials" {
 
   # LaunchDarkly advises not to let Terraform overwrite the rules of a flag that an experiment
   # runs on: an experiment adds allocation settings to its rule, and a later apply would reset them.
+  # `on` is ignored too: the kill switch's whole job is to turn this off outside Terraform, and
+  # without this a later `npm run setup` (or any apply) would silently turn it back on, undoing
+  # the remediation the demo just showed.
   lifecycle {
-    ignore_changes = [rules, fallthrough]
+    ignore_changes = [rules, fallthrough, on]
   }
 }
 
@@ -187,6 +190,25 @@ resource "launchdarkly_feature_flag_environment" "exam_progress_tracker" {
 
 # Needs a plan with flag triggers (a free trial includes them).
 resource "launchdarkly_flag_trigger" "kill_switch" {
+  project_key     = local.project_key
+  env_key         = var.environment_key
+  flag_key        = launchdarkly_feature_flag.premium_video_tutorials.key
+  integration_key = "generic-trigger"
+  enabled         = true
+
+  instructions = {
+    kind = "turnFlagOff"
+  }
+
+  depends_on = [launchdarkly_feature_flag_environment.premium_video_tutorials]
+}
+
+# A second, independent trigger for the same instruction (turn the flag off), so New Relic's alert
+# can remediate automatically without touching the button above: the page's "Fire kill switch"
+# keeps working exactly as before, on its own URL. LaunchDarkly supports several triggers per flag,
+# each with its own one-time URL; New Relic has no dedicated trigger integration; its docs say to
+# point a Workflow's webhook destination at a generic trigger URL, same as this one.
+resource "launchdarkly_flag_trigger" "new_relic_alert" {
   project_key     = local.project_key
   env_key         = var.environment_key
   flag_key        = launchdarkly_feature_flag.premium_video_tutorials.key
