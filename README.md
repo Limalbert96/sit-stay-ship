@@ -135,7 +135,7 @@ If a setup step reports `[!]`, it says what to finish by hand, and [Manual setup
 
 | Capability | How it is met |
 |---|---|
-| Explore LaunchDarkly integrations for a more compelling demo | **Slack**: every flag change is posted to a channel (UI in 2 minutes, or `--slack-webhook-url`). **Terraform**: the whole LaunchDarkly setup is code (`terraform/`). Optional **New Relic** browser and APM agents, plus flag changes written to New Relic as change-tracking markers. |
+| Explore LaunchDarkly integrations for a more compelling demo | **Slack**: every flag change is posted to a channel (UI in 2 minutes, or `--slack-webhook-url`). **Terraform**: the whole LaunchDarkly setup is code (`terraform/`). Optional **New Relic** browser and APM agents, flag changes written to New Relic as change-tracking markers, and a second flag trigger New Relic can fire on its own to remediate an incident with no one pressing a button ([off by default](#optional-let-new-relic-pull-the-kill-switch-itself)). |
 
 </details>
 
@@ -748,11 +748,44 @@ The APM agent reports the Node backend:
 
    The customers are real browser sessions: each is a separate headless Chrome with its own profile, so New Relic counts a distinct session and a distinct user, and the clicks are real mouse events, so they register as rage clicks and frustration signals. **Nothing is faked into New Relic** — the telemetry comes from the app's own browser agent, exactly as it would from a person. The visitors themselves are synthetic (premium-tier `shopper-NN`, marked `synthetic: true` in LaunchDarkly, and premium so they stay out of the trial-users experiment).
 
-   **The alert.** With an alert condition on rage clicks (`SELECT count(*) FROM UserAction WHERE rageClick = true FACET appName, enduser.id`), step 3 opens a real New Relic issue while the flag is still on, and step 5 is the fix. That is the whole loop an SE is asked about: ship, detect, remediate without a deploy.
+   **The alert.** With a condition on rage clicks (`SELECT uniqueCount(enduser.id) FROM UserAction WHERE rageClick = true AND appName = 'Canine Good Citizen'`, no facet, CADENCE aggregation, `>= 3` distinct customers), step 3 opens a real New Relic issue while the flag is still on, and step 5 is the fix. That is the whole loop an SE is asked about: ship, detect, remediate without a deploy.
+
+   A faceted, `EVENT_FLOW` version of that condition (one series per `enduser.id`) will not fire: each synthetic customer produces exactly one rage-click event, ever, and `EVENT_FLOW` only closes a window once *later* data arrives for that same series, which never happens. Facet only if you also switch to `CADENCE`.
 
    Timings are adjustable: `npm run incident -- --users 20 --calm 30 --detect 60`, and `--dry-run` prints the plan without touching anything. It needs `LD_API_TOKEN` and `LD_TRIGGER_URL` in `.env`, plus Chrome (`CHROME=/path/to/chrome` if it is not in the usual place).
 
    ![New Relic browser summary during the simulated incident: JavaScript errors climb while a dozen customers rage-click the broken card, then a "premium-video-tutorials turned OFF by the kill switch" marker lands and the errors stop](docs/images/15-incident-timeline.jpg)
+
+### Optional: let New Relic pull the kill switch itself
+
+The steps above are a person watching the alert and pressing **Fire kill switch**. New Relic can also do that step on its own: a [Workflow](https://launchdarkly.com/docs/integrations/new-relic/triggers) fires a webhook the moment the rage-click issue opens, and the webhook is a second LaunchDarkly flag trigger. This is disabled by default in this repo, so a demo stays fully manual unless you turn it on.
+
+**Why a second trigger, not the same one.** LaunchDarkly flags support several triggers at once, each with its own one-time URL and the same `turnFlagOff` instruction ([`terraform/main.tf`](terraform/main.tf), `launchdarkly_flag_trigger.new_relic_alert`). The page's **Fire kill switch** button keeps using the original trigger (`LD_TRIGGER_URL`) on its own URL; New Relic gets a URL of its own (Terraform output `new_relic_trigger_url`). Neither knows the other exists, and firing one never touches the other's rate limit or history.
+
+**Wiring it up.** New Relic has no dedicated LaunchDarkly trigger integration: its own docs say to point a Workflow's webhook destination at a generic trigger URL. Concretely, that is a chain of three NerdGraph objects, all under **Alerts**:
+
+```
+Destination (WEBHOOK, url = new_relic_trigger_url)
+  → Channel (WEBHOOK, product IINT — the Workflows product, not ALERTS)
+    → Workflow (issuesFilter on the rage-click policy, trigger ACTIVATED)
+```
+
+The `product` on the channel matters: a channel created with `product: ALERTS` looks fine on its own, but a Workflow cannot attach to it (`aiWorkflowsCreateWorkflow` fails with "unexpected error... fetching a channel"). Workflows need `product: IINT`.
+
+**Turning it on or off.** In New Relic: **Alerts → Workflows → Rage click → LaunchDarkly kill switch**, toggle it. Or with `NR_API_KEY`:
+
+```graphql
+mutation {
+  aiWorkflowsUpdateWorkflow(accountId: <your account>, updateWorkflowData: {
+    id: "<the workflow id, from the Workflows page URL>"
+    workflowEnabled: true
+  }) { workflow { workflowEnabled } }
+}
+```
+
+POST that (as `{"query": "..."}`) to `https://api.newrelic.com/graphql` with header `API-Key: $NR_API_KEY`.
+
+**Do not run it enabled during a manual demo.** The alert's `aggregationDelay` and `aggregationWindow` mean it opens an issue roughly 90 seconds to 2 minutes after the rage clicks stop, and the webhook fires the moment it opens. If you plan to press **Fire kill switch** yourself, the automated path can beat you to it and turn the flag off first, which quietly removes the "I fix it live" beat. Leave it off for a manual run, and switch it on only for a separate scene demonstrating unattended remediation, with nobody touching the button.
 
 ---
 

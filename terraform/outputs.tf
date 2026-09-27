@@ -18,6 +18,12 @@ output "trigger_url" {
   sensitive   = true
 }
 
+output "new_relic_trigger_url" {
+  description = "A second, separate trigger that also turns premium-video-tutorials off. Paste this into a New Relic Workflow's webhook destination; it never touches the app or the kill-switch button above."
+  value       = launchdarkly_flag_trigger.new_relic_alert.trigger_url
+  sensitive   = true
+}
+
 output "ai_config_key" {
   value = launchdarkly_ai_config.chatbot.key
 }
