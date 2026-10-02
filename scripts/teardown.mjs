@@ -17,6 +17,7 @@ import {
   AI_CONFIG_KEY, DEMO_FLAG_KEYS, DEMO_METRIC_KEYS, createApi, deleteIfPresent, mergeEnv, tearDownExperiments,
 } from './setup-lib.mjs';
 import { TOKEN_HELP, getApiToken } from './token.mjs';
+import { tearDownNewRelicIntegration } from './newrelic-lib.mjs';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -62,6 +63,10 @@ const stateList = hasTerraform && existsSync('terraform/terraform.tfstate') ? tf
 const hasState = stateList !== '';
 const ownsProject = stateList.split('\n').includes('launchdarkly_project.demo[0]');
 const tfDestroy = () => spawnSync('terraform', ['-chdir=terraform', 'destroy', '-auto-approve', '-input=false', '-var', `project_key=${args.project}`, '-var', `environment_key=${args.env}`, ...(ownsProject ? ['-var', 'create_project=true'] : [])], { env: tfEnv, stdio: 'inherit' });
+
+// LaunchDarkly's New Relic integration is an account-level subscription, not part of the project,
+// so it would outlive a deleted project. Remove it first, either way.
+for (const result of await tearDownNewRelicIntegration(ctx)) report(result);
 
 if (ownsProject) {
   // Setup created this project (--create-project), so deleting the project removes everything in

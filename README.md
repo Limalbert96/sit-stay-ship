@@ -69,6 +69,9 @@ npm run simulate -- --target ai --users 2000
 3. **Read the experiment results** on the Results tab a few minutes after `npm run simulate` (LaunchDarkly analyses in 5-minute steps).
 4. **Optional, Slack:** add the Slack integration in LaunchDarkly (about 2 minutes, [steps](#slack-flag-change-notifications)) to see every flag change posted to a channel.
 5. **Optional, New Relic:** create the account and apps yourself and add the keys to `.env` ([steps](#new-relic-optional-browser-and-apm-agents)). Nothing else depends on it.
+   Then run `npm run incident` to generate the charts. Two ways to end the incident:
+   - **Manual (default, for live demos):** press **Fire kill switch** on the page yourself, or just let the script do it (`npm run incident` alone). Make sure auto-remediation is off first: `npm run newrelic -- --auto-remediation off`.
+   - **Auto-healing:** New Relic's rage-click alert pulls the kill switch itself, no one touches anything. Turn it on with `npm run newrelic -- --auto-remediation on`, then run `npm run incident -- --auto-remediation` (this flag also works standalone: it turns automation on for that one run and restores the previous setting after, so it never breaks a later manual demo).
 6. **Clean up:** `npm run teardown -- --project <key>` removes everything setup made in a scratch project (see [Try it from scratch](#try-it-from-scratch-like-a-new-user-scratch-project)).
 
 If a setup step reports `[!]`, it says what to finish by hand, and [Manual setup](#manual-setup-instead-of-the-script) covers each one.
@@ -135,7 +138,7 @@ If a setup step reports `[!]`, it says what to finish by hand, and [Manual setup
 
 | Capability | How it is met |
 |---|---|
-| Explore LaunchDarkly integrations for a more compelling demo | **Slack**: every flag change is posted to a channel (UI in 2 minutes, or `--slack-webhook-url`). **Terraform**: the whole LaunchDarkly setup is code (`terraform/`). Optional **New Relic** browser and APM agents, flag changes written to New Relic as change-tracking markers, and a second flag trigger New Relic can fire on its own to remediate an incident with no one pressing a button ([off by default](#optional-let-new-relic-pull-the-kill-switch-itself)). |
+| Explore LaunchDarkly integrations for a more compelling demo | **Slack**: every flag change is posted to a channel (UI in 2 minutes, or `--slack-webhook-url`). **Terraform**: the whole LaunchDarkly setup is code (`terraform/`). Optional **New Relic** browser and APM agents, flag changes written to New Relic as change-tracking markers, and a second flag trigger New Relic can fire on its own to remediate an incident with no one pressing a button ([off by default](#automated-remediation-let-new-relic-pull-the-kill-switch-itself)). |
 
 </details>
 
@@ -271,7 +274,8 @@ It stops and archives the experiments, runs `terraform destroy` (if Terraform cr
 | `npm run experiments` | Creates and starts the two experiments (setup does this; use it to retry) |
 | `npm run teardown` | Removes what setup created (above) |
 | `npm run simulate -- --target flag\|ai --users N` | Generates synthetic experiment traffic ([details](#the-traffic-simulator)) |
-| `npm run incident` | Plays out a whole bad-release incident for the New Relic charts ([details](#new-relic-optional-browser-and-apm-agents)) |
+| `npm run incident` | Plays out a whole bad-release incident for the New Relic charts ([details](#new-relic-optional-browser-and-apm-agents)); `--auto-remediation` lets New Relic fire the kill switch |
+| `npm run newrelic` | Wires LaunchDarkly and New Relic both ways; `--auto-remediation on\|off`, `--status` ([details](#automated-remediation-let-new-relic-pull-the-kill-switch-itself)) |
 | `npm test` | Runs the unit tests (Vitest) |
 | `npm run lint` / `npm run build` | Lint and production build |
 
@@ -718,17 +722,27 @@ The APM agent reports the Node backend:
 
 ![New Relic APM summary for the Canine Good Citizen service: throughput, errors and transactions](docs/images/13-nr-apm.jpg)
 
-3. **Change tracking: flag changes as markers on both entities** (needs `NR_API_KEY`). LaunchDarkly ships a New Relic integration meant to do exactly this, but it posts to an API New Relic has retired: it was tried here and no events ever arrived. [`server/changeTracking.js`](server/changeTracking.js) is the workaround, and it needs no integration at all.
+3. **Change tracking: every flag change as a marker on New Relic's charts** (needs `NR_USER_KEY`). LaunchDarkly's New Relic integration (`new-relic-apm-v2`) writes each flag change to New Relic as a **change tracking event of category `FEATURE_FLAG`**, so a "flag turned off" marker lines up with the error spike. `npm run setup` (or `npm run newrelic` on its own) creates it when `NR_USER_KEY` is in `.env`: a New Relic **user key** (profile menu, API keys, Create key, type **User**; the license and browser keys above cannot call NerdGraph).
 
-   The backend already holds a LaunchDarkly server SDK connection, and the SDK raises an event whenever a flag is edited — from the LaunchDarkly UI, the REST API, or the kill-switch trigger. On each one the backend calls New Relic's NerdGraph API itself and writes a **change tracking event of category `FEATURE_FLAG`**, once against the **APM** entity and once against the **Browser** entity. Both are needed: New Relic attaches markers per entity, so a marker on the backend service does not appear on the browser charts. With both, the "flag turned off" marker lines up with the error spike on whichever chart you are showing.
+   One subscription marks one New Relic application, so there are two, named after the entity: **`Canine Good Citizen [APM]`** and **`Canine Good Citizen [Browser]`**. The application ids are looked up from `NR_APM_APP_NAME`. Two details the setup handles for you:
+   - **All environments, one project.** The integration's default policy covers only the `production` environment, and this demo runs in `test`, so each subscription's policy is `proj/<project>:env/*:flag/*`.
+   - **Created through the API, not Terraform.** The Terraform provider (3.1.x) only accepts the integration keys compiled into it, and `new-relic-apm-v2` is newer than that list. The step finds its subscriptions by name and updates them, so running it again is safe.
 
-   To switch it on, add a New Relic **user key** to `.env` as `NR_API_KEY` (profile menu, API keys, Create key, type **User**; the license and browser keys above cannot call NerdGraph). The backend finds the two entities by `NR_APM_APP_NAME`, or you can name them outright with `NR_APM_ENTITY_GUID` and `NR_BROWSER_ENTITY_GUID`. On start it logs `New Relic change tracking on`, then a line per flag change; anything that fails only warns, so a demo never depends on New Relic being reachable. To see the markers: open the APM or Browser entity, then **Change tracking** (or the markers on any chart), and toggle a flag.
-
-   Each marker says what actually happened, so it reads on its own on a chart: `premium-video-tutorials turned ON`, `turned OFF`, or `turned OFF by the kill switch` when the trigger caused it. The flag key, its new state, the trigger, project, environment and `source: sit-stay-ship` ride along as custom attributes:
+   Each event links back to LaunchDarkly (`launchdarklyAuditLogUrl`, `launchdarklyFlagUrl`) and says who changed what, for example `<your name> turned on the flag Premium Video Tutorials in 'Test' (via API), Comment: …`:
 
    ```sql
-   SELECT shortDescription, flagState, trigger FROM ChangeTrackingEvent WHERE source = 'sit-stay-ship' SINCE 1 day ago
+   SELECT shortDescription, user, launchdarklyAuditLogUrl FROM ChangeTrackingEvent WHERE launchdarklyProjectKey = 'cgc-demo' SINCE 1 day ago
    ```
+
+   > **Known gap (reported to LaunchDarkly):** in testing, the `[Browser]` subscription reports success but no event reaches the Browser entity; only `[APM]` events arrive. The Browser app **calls** the APM service, which New Relic records as a relationship, so Browser charts still show the APM markers: switch on **Related Changes** on the chart.
+
+   **Which kill switch fired?** Both kill switches are flag triggers, and a trigger fire reads the same in New Relic: `Generic trigger made changes to the flag …`. LaunchDarkly's flag history tells them apart, because each caller sends an `eventName` that the trigger records: **`Manual kill switch: pressed on the CGC Prep page was triggered`** (the page's button, from [`server/index.js`](server/index.js)) or **`New Relic auto-remediation: the rage-click alert opened an issue was triggered`** (New Relic's workflow). From any marker in New Relic, follow `launchdarklyAuditLogUrl` to see which.
+
+   *Fallback without the integration:* [`server/changeTracking.js`](server/changeTracking.js) can write the same markers from the chat backend instead, through NerdGraph. It is **off by default**, because running it alongside the integration marks every change twice; set `NR_BACKEND_CHANGE_TRACKING=true` to use it.
+
+   **It is also the only way to say exactly which trigger fired, in the marker's own text.** LaunchDarkly's integration always writes `Generic trigger made changes to the flag ...`: that sentence is the same for every trigger of the same type, because a trigger has no name or description field for the two kill switches (the page's button, New Relic's own workflow) to be told apart in. The fallback instead reads back the `eventName` the firing trigger was last sent with (`latestTriggerEventName`, matched only if it fired in roughly the last 15 seconds) and writes that straight into the marker: `premium-video-tutorials turned OFF: Manual kill switch: pressed on the CGC Prep page` or `... New Relic auto-remediation: the rage-click alert opened an issue`, so the chart is unambiguous without following a link at all.
+
+   **A plain edit (clicking the toggle in the LaunchDarkly dashboard, or a raw API call) has no trigger at all**, so there is no eventName to read. For that case the fallback reads LaunchDarkly's own audit log instead (`latestAuditTitle`, same freshness window) and writes its one-line summary, markdown stripped, into the marker: `premium-video-tutorials turned OFF: Albert Lim turned off the flag Premium Video Tutorials in Test`. Trigger eventName wins when both exist; the audit title is only the fallback for when nothing fired a trigger.
 
    **The whole incident on one chart.** Clicking through it by hand gives one session and a thin chart, so [`scripts/simulate-incident.mjs`](scripts/simulate-incident.mjs) plays out the incident properly, with real customers and real time between the steps:
 
@@ -748,44 +762,55 @@ The APM agent reports the Node backend:
 
    The customers are real browser sessions: each is a separate headless Chrome with its own profile, so New Relic counts a distinct session and a distinct user, and the clicks are real mouse events, so they register as rage clicks and frustration signals. **Nothing is faked into New Relic** — the telemetry comes from the app's own browser agent, exactly as it would from a person. The visitors themselves are synthetic (premium-tier `shopper-NN`, marked `synthetic: true` in LaunchDarkly, and premium so they stay out of the trial-users experiment).
 
-   **The alert.** With a condition on rage clicks (`SELECT uniqueCount(enduser.id) FROM UserAction WHERE rageClick = true AND appName = 'Canine Good Citizen'`, no facet, CADENCE aggregation, `>= 3` distinct customers), step 3 opens a real New Relic issue while the flag is still on, and step 5 is the fix. That is the whole loop an SE is asked about: ship, detect, remediate without a deploy.
+   **The alert.** With a condition on rage clicks (`SELECT uniqueCount(enduser.id) FROM UserAction WHERE rageClick = true AND appName = 'Canine Good Citizen'`, no facet, `CADENCE` aggregation, `>= 1` distinct customer), step 3 opens a real New Relic issue while the flag is still on, and step 5 is the fix. That is the whole loop an SE is asked about: ship, detect, remediate without a deploy.
 
-   A faceted, `EVENT_FLOW` version of that condition (one series per `enduser.id`) will not fire: each synthetic customer produces exactly one rage-click event, ever, and `EVENT_FLOW` only closes a window once *later* data arrives for that same series, which never happens. Facet only if you also switch to `CADENCE`.
+   Two aggregation methods look reasonable here and both have the same failure mode, confirmed by testing: they only re-evaluate a window when a *new* matching event arrives, and a fixed bad release means no more events ever arrive, so a still-open issue never gets re-checked and sits open for days.
+   - A faceted, `EVENT_FLOW` condition (one series per `enduser.id`) never fires at all: each synthetic customer produces exactly one rage-click event, ever, and `EVENT_FLOW` needs *later* data in the same series to close a window.
+   - `EVENT_TIMER` fires correctly, but the issue it opens never closes: tested live, an issue stayed `ACTIVATED` for 15+ minutes with zero new rage clicks, because EVENT_TIMER only publishes a window when an event starts it.
+
+   `CADENCE` is the one that works both ways: it publishes a window every `aggregationDelay` seconds regardless of whether any data arrived, so a `fillOption` of `STATIC` / `fillValue: 0` actually gets a chance to apply, the condition sees a real 0, and the issue closes. Tested live: closed within a minute of the config taking effect, 18 minutes after opening.
 
    Timings are adjustable: `npm run incident -- --users 20 --calm 30 --detect 60`, and `--dry-run` prints the plan without touching anything. It needs `LD_API_TOKEN` and `LD_TRIGGER_URL` in `.env`, plus Chrome (`CHROME=/path/to/chrome` if it is not in the usual place).
 
    ![New Relic browser summary during the simulated incident: JavaScript errors climb while a dozen customers rage-click the broken card, then a "premium-video-tutorials turned OFF by the kill switch" marker lands and the errors stop](docs/images/15-incident-timeline.jpg)
 
-### Optional: let New Relic pull the kill switch itself
+### Automated remediation: let New Relic pull the kill switch itself
 
-The steps above are a person watching the alert and pressing **Fire kill switch**. New Relic can also do that step on its own: a [Workflow](https://launchdarkly.com/docs/integrations/new-relic/triggers) fires a webhook the moment the rage-click issue opens, and the webhook is a second LaunchDarkly flag trigger. This is disabled by default in this repo, so a demo stays fully manual unless you turn it on.
+The steps above are a person watching the alert and pressing **Fire kill switch**. The best practice once that works is to take the person out of the loop: a New Relic [Workflow](https://launchdarkly.com/docs/integrations/new-relic/triggers) fires a webhook the moment the rage-click alert opens an issue, and the webhook is a LaunchDarkly flag trigger. Detection to remediation with no one awake. It is **off by default** here, so a live demo stays manual.
 
-**Why a second trigger, not the same one.** LaunchDarkly flags support several triggers at once, each with its own one-time URL and the same `turnFlagOff` instruction ([`terraform/main.tf`](terraform/main.tf), `launchdarkly_flag_trigger.new_relic_alert`). The page's **Fire kill switch** button keeps using the original trigger (`LD_TRIGGER_URL`) on its own URL; New Relic gets a URL of its own (Terraform output `new_relic_trigger_url`). Neither knows the other exists, and firing one never touches the other's rate limit or history.
-
-**Wiring it up.** New Relic has no dedicated LaunchDarkly trigger integration: its own docs say to point a Workflow's webhook destination at a generic trigger URL. Concretely, that is a chain of three NerdGraph objects, all under **Alerts**:
-
-```
-Destination (WEBHOOK, url = new_relic_trigger_url)
-  → Channel (WEBHOOK, product IINT — the Workflows product, not ALERTS)
-    → Workflow (issuesFilter on the rage-click policy, trigger ACTIVATED)
+```bash
+npm run newrelic                              # set it all up (npm run setup does this too); safe to re-run
+npm run newrelic -- --status                  # is the automated kill switch on or off?
+npm run newrelic -- --auto-remediation on     # let New Relic fire it
+npm run newrelic -- --auto-remediation off    # back to manual (do this before a live demo)
+npm run incident -- --auto-remediation        # rehearse it: on for this run only, off again afterwards
 ```
 
-The `product` on the channel matters: a channel created with `product: ALERTS` looks fine on its own, but a Workflow cannot attach to it (`aiWorkflowsCreateWorkflow` fails with "unexpected error... fetching a channel"). Workflows need `product: IINT`.
+`npm run newrelic` ([`scripts/newrelic.mjs`](scripts/newrelic.mjs), [`scripts/newrelic-lib.mjs`](scripts/newrelic-lib.mjs)) creates, or adopts and fixes, everything by name, so it is safe on an account where some of it was made by hand:
 
-**Turning it on or off.** In New Relic: **Alerts → Workflows → Rage click → LaunchDarkly kill switch**, toggle it. Or with `NR_API_KEY`:
+| Object | Where | What it is |
+|---|---|---|
+| `Canine Good Citizen [APM]`, `[Browser]` | LaunchDarkly integrations | Flag changes into New Relic (see above) |
+| `Rage Click` alert | New Relic alert policy | `SELECT uniqueCount(enduser.id) FROM UserAction WHERE rageClick = true AND appName = …`, `CADENCE`, empty windows filled with `0`, force-closes after 120s quiet |
+| `LaunchDarkly kill switch (rage click alert)` | New Relic destination | Webhook to the second trigger's URL |
+| `LaunchDarkly kill switch webhook (workflows)` | New Relic channel | Sends `{"eventName": "New Relic auto-remediation: …"}`, so flag history names the cause |
+| `Rage click -> LaunchDarkly kill switch` | New Relic workflow | Rage-click issues, on `ACTIVATED`; created **disabled** |
 
-```graphql
-mutation {
-  aiWorkflowsUpdateWorkflow(accountId: <your account>, updateWorkflowData: {
-    id: "<the workflow id, from the Workflows page URL>"
-    workflowEnabled: true
-  }) { workflow { workflowEnabled } }
-}
-```
+**It checks which trigger fired, not just that the flag changed.** `--auto-remediation` waits for the New Relic trigger's own `_lastTriggeredAt` to advance, rather than for the flag to merely go off: the flag can go off some other way too (a person pressing the page's button, or editing the flag directly), while New Relic is still deciding, and polling only "is it off" would wrongly credit New Relic for a change it had nothing to do with. Tested: it happened, once, before this check existed. If the timeout is reached, it says plainly whether the flag is off anyway (so you can tell "New Relic never fired" from "it fired but after the limit").
 
-POST that (as `{"query": "..."}`) to `https://api.newrelic.com/graphql` with header `API-Key: $NR_API_KEY`.
+**Why a second trigger, not the same one.** LaunchDarkly flags support several triggers at once, each with its own one-time URL ([`terraform/main.tf`](terraform/main.tf), `launchdarkly_flag_trigger.new_relic_alert`, output `new_relic_trigger_url`). The page's button keeps its own trigger (`LD_TRIGGER_URL`); neither touches the other's URL, rate limit or history. If the trigger is ever re-created its URL changes; re-run `npm run newrelic` and the destination follows it.
 
-**Do not run it enabled during a manual demo.** The alert's `aggregationDelay` and `aggregationWindow` mean it opens an issue roughly 90 seconds to 2 minutes after the rage clicks stop, and the webhook fires the moment it opens. If you plan to press **Fire kill switch** yourself, the automated path can beat you to it and turn the flag off first, which quietly removes the "I fix it live" beat. Leave it off for a manual run, and switch it on only for a separate scene demonstrating unattended remediation, with nobody touching the button.
+**Why the alert closes now (it took three attempts to get right).** An alert that counts rage clicks gets *no data at all* once the kill switch works, because nobody can click a card that is gone, and that broke the issue closing in three different ways before landing on a config that actually works:
+   - **Fill `NONE`** (the original config): no data means no value at all, so there's nothing to compare against the threshold. The issue stays open until the violation time limit (72 hours by default).
+   - **`EVENT_TIMER` with fill `STATIC`/`0`** (looked right, tested live, was wrong): EVENT_TIMER only re-evaluates a window when a new event starts it, so once clicks stop there is no later window for the fill to apply to. Confirmed: stayed open 15+ minutes with zero new clicks.
+   - **`CADENCE` with fill `STATIC`/`0`, `expiration` left at its default** (also looked right, also tested live, also wrong): `fillOption` fills a gap *within* a signal that is still reporting; it does nothing once the signal goes fully quiet (zero matching events, not even a non-matching one), which is exactly what happens between demo runs. Confirmed twice, on two different condition IDs: an issue stayed `ACTIVATED` for 12 and 33 minutes respectively, with the underlying query reading zero the entire time.
+   - **`CADENCE` with fill `STATIC`/`0`, plus `expiration: { closeViolationsOnExpiration: true, expirationDuration: 120 }`** (what `npm run newrelic` sets): the `expiration` block is what governs a fully quiet signal, separately from `fillOption`. With it set, a genuinely quiet condition force-closes any open violation after the quiet gap passes. Confirmed live, twice: a stuck issue (already past the 12- and 33-minute marks above) closed within about a minute of this being applied.
+
+   `npm run incident -- --auto-remediation` checks exactly this at the end of a run.
+
+**Two gotchas, for building this by hand:** a Workflow can only attach to a channel whose `product` is `IINT` (an `ALERTS`-product channel fails with "unexpected error… fetching a channel"); and a faceted `EVENT_FLOW` rage-click condition never fires, because each customer sends one event ever and `EVENT_FLOW` waits for later data in the same series.
+
+**Switch it off before a manual demo.** The alert opens an issue a minute or two after the rage clicks, and the workflow fires the moment it opens. If you mean to press **Fire kill switch** yourself, an enabled workflow can beat you to it. `npm run newrelic -- --status` tells you where it stands.
 
 ---
 
@@ -925,6 +950,7 @@ scripts/
   ollama.mjs, ollama-setup.mjs  install, start and feed Ollama (npm run ollama)
   simulate-traffic.mjs        synthetic experiment traffic
   simulate-incident.mjs       plays out a bad release: real browser sessions, rage clicks, kill switch
+  newrelic.mjs, newrelic-lib.mjs  npm run newrelic: LaunchDarkly's New Relic integration, alert, automated kill switch
 src/
   main.jsx                    LaunchDarkly provider (streaming, evaluation reasons)
   observability.js            New Relic browser agent

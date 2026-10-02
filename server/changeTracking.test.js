@@ -4,7 +4,7 @@ import {
 } from './changeTracking.js';
 
 const env = {
-  NR_API_KEY: 'NRAK-test',
+  NR_USER_KEY: 'NRAK-test',
   NR_ACCOUNT_ID: '7923562',
   NR_APM_APP_NAME: 'Canine Good Citizen',
   LD_PROJECT_KEY: 'cgc-demo',
@@ -25,11 +25,16 @@ const created = { ok: true, json: async () => ({ data: { changeTrackingCreateEve
 beforeEach(() => resetEntityCache());
 
 describe('changeTrackingEnabled', () => {
-  it('needs a user key and something to identify the account or the entities', () => {
-    expect(changeTrackingEnabled(env)).toBe(true);
-    expect(changeTrackingEnabled({ NR_ACCOUNT_ID: '1' })).toBe(false); // license keys cannot call NerdGraph
-    expect(changeTrackingEnabled({ NR_API_KEY: 'NRAK-test' })).toBe(false);
-    expect(changeTrackingEnabled({ NR_API_KEY: 'NRAK-test', NR_APM_ENTITY_GUID: 'a', NR_BROWSER_ENTITY_GUID: 'b' })).toBe(true);
+  const on = { NR_BACKEND_CHANGE_TRACKING: 'true' };
+  it('is off by default, because the LaunchDarkly integration does this job', () => {
+    expect(changeTrackingEnabled(env)).toBe(false);
+  });
+
+  it('when switched on, needs a user key and something to identify the account or the entities', () => {
+    expect(changeTrackingEnabled({ ...env, ...on })).toBe(true);
+    expect(changeTrackingEnabled({ ...on, NR_ACCOUNT_ID: '1' })).toBe(false); // license keys cannot call NerdGraph
+    expect(changeTrackingEnabled({ ...on, NR_USER_KEY: 'NRAK-test' })).toBe(false);
+    expect(changeTrackingEnabled({ ...on, NR_USER_KEY: 'NRAK-test', NR_APM_ENTITY_GUID: 'a', NR_BROWSER_ENTITY_GUID: 'b' })).toBe(true);
   });
 });
 
@@ -39,6 +44,24 @@ describe('entitySearchQuery', () => {
     expect(q).toContain("name = 'Canine Good Citizen'");
     expect(q).toContain("domain IN ('APM', 'BROWSER')");
     expect(q).toContain('accountId = 7923562');
+  });
+});
+
+describe('latestAuditTitle', () => {
+  it('strips the markdown LaunchDarkly puts in an audit-log title', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ items: [{
+      date: Date.now(),
+      title: '[Albert Lim](mailto:a@b.com) turned on the flag [Premium Video Tutorials](url) in `Test` \\(via API\\)',
+    }] }) }));
+    const { latestAuditTitle } = await import('./changeTracking.js');
+    expect(await latestAuditTitle({ flagKey: 'premium-video-tutorials', project: 'cgc-demo', token: 'api-x', fetchImpl }))
+      .toBe('Albert Lim turned on the flag Premium Video Tutorials in Test (via API)');
+  });
+
+  it('ignores an entry older than the freshness window, so a stale edit is not misquoted as the cause', async () => {
+    const fetchImpl = vi.fn(async () => ({ ok: true, json: async () => ({ items: [{ date: Date.now() - 60_000, title: 'Old news' }] }) }));
+    const { latestAuditTitle } = await import('./changeTracking.js');
+    expect(await latestAuditTitle({ flagKey: 'k', project: 'p', token: 'api-x', fetchImpl })).toBeNull();
   });
 });
 
@@ -70,12 +93,35 @@ describe('flagChangeEvent', () => {
     expect(event().query).toContain('flagState: "unknown"');
   });
 
-  it('labels a kill-switch change as the kill switch, not as an edit', () => {
+  it('falls back to a guessed kill-switch label when no trigger eventName was found', () => {
     const { query, variables } = event({ state: 'off', viaKillSwitch: true });
-    expect(variables.shortDescription).toBe('premium-video-tutorials turned OFF by the kill switch');
-    expect(variables.description).toContain('to stop a bad release');
+    expect(variables.shortDescription).toContain('the kill switch');
+    expect(variables.shortDescription).toContain('unconfirmed');
     expect(variables.user).toBe('LaunchDarkly kill switch');
-    expect(query).toContain('trigger: "kill-switch"');
+    expect(query).toContain('trigger: "kill-switch-guessed"');
+  });
+
+  it('prefers the trigger\'s own eventName, which names the exact cause unambiguously', () => {
+    // LaunchDarkly's own text ("Generic trigger made changes...") is the same for every trigger of
+    // the same type, so this is the only way to tell "the page's button" from "New Relic's workflow".
+    const { query, variables } = event({ state: 'off', viaKillSwitch: true, triggerEventName: 'New Relic auto-remediation: the rage-click alert opened an issue' });
+    expect(variables.shortDescription).toBe('premium-video-tutorials turned OFF: New Relic auto-remediation: the rage-click alert opened an issue');
+    expect(variables.user).toBe('LaunchDarkly trigger');
+    expect(query).toContain('trigger: "named-trigger"');
+  });
+
+  it('falls back to the audit-log summary for a plain edit that no trigger caused', () => {
+    // This is what makes "Albert Lim updated Premium Video Tutorials in 'Test'" (a UI edit, no
+    // trigger involved at all) show up clearly on the New Relic marker too.
+    const { query, variables } = event({ state: 'on', auditTitle: "Albert Lim updated Premium Video Tutorials in 'Test'" });
+    expect(variables.shortDescription).toBe("premium-video-tutorials turned ON: Albert Lim updated Premium Video Tutorials in 'Test'");
+    expect(variables.user).toBe('LaunchDarkly');
+    expect(query).toContain('trigger: "audit-log"');
+  });
+
+  it('prefers the trigger eventName over the audit title when both are available', () => {
+    const { variables } = event({ state: 'off', triggerEventName: 'Manual kill switch: pressed on the CGC Prep page', auditTitle: 'Generic trigger made changes to the flag' });
+    expect(variables.shortDescription).toContain('Manual kill switch');
   });
 
   it('strips anything that could end the string early in the custom attributes', () => {

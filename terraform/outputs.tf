@@ -27,3 +27,8 @@ output "new_relic_trigger_url" {
 output "ai_config_key" {
   value = launchdarkly_ai_config.chatbot.key
 }
+
+output "new_relic_trigger_id" {
+  description = "ID of the New Relic trigger, so scripts/simulate-incident.mjs can confirm THIS trigger fired, not just that the flag changed."
+  value       = launchdarkly_flag_trigger.new_relic_alert.id
+}
