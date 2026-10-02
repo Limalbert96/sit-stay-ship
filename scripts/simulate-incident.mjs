@@ -6,6 +6,9 @@
 //   npm run incident -- --users 20            more customers in the incident
 //   npm run incident -- --calm 30 --detect 60 a shorter run, for a rehearsal
 //   npm run incident -- --dry-run             prints the plan and changes nothing
+//   npm run incident -- --auto-remediation    nobody presses the kill switch: New Relic's alert
+//                                             does it (the workflow is switched on for this run
+//                                             only, and back off afterwards, even on Ctrl-C)
 //
 // The customers are real browser sessions: each one is a separate headless Chrome with its own
 // profile, so New Relic sees a distinct session and a distinct user, and the clicks are real mouse
@@ -17,11 +20,12 @@
 // the feature (that is how they meet the bug) and so they stay out of the trial-users experiment.
 //
 // Needs: the app running (`npm run dev`), LD_API_TOKEN and LD_TRIGGER_URL in .env, and Chrome.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
+import { RAGE_CLICK_SIGNAL, autoRemediationEnabled, nerdGraphClient, setAutoRemediation } from './newrelic-lib.mjs';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -38,6 +42,8 @@ const { values: args } = parseArgs({
     concurrency: { type: 'string', default: '3' },
     linger: { type: 'string', default: '25' },     // seconds a session stays open, so telemetry is sent
     'dry-run': { type: 'boolean', default: false },
+    'auto-remediation': { type: 'boolean', default: false },
+    'remediate-timeout': { type: 'string', default: '600' }, // seconds to wait for New Relic to act
   },
 });
 
@@ -196,8 +202,8 @@ const plan = `Incident simulation
   1. release          turn premium-video-tutorials ON
   2. calm             ${num('healthy')} customers browse normally, then wait ${args.calm}s
   3. bad release      ${num('users')} customers meet the broken card and rage-click it, over ${args.spread}s
-  4. it burns         ${args.detect}s with the feature still on, so an alert has time to notice
-  5. remediate        fire the kill switch: the flag goes off, no deploy
+  4. it burns         ${args['auto-remediation'] ? 'until New Relic notices' : `${args.detect}s with the feature still on, so an alert has time to notice`}
+  5. remediate        ${args['auto-remediation'] ? 'New Relic\'s alert fires the kill switch by itself (automated remediation, this run only)' : 'fire the kill switch: the flag goes off, no deploy'}
   6. recovery         ${num('recovery')} more customers, now seeing a working page
 `;
 console.log(plan);
@@ -215,7 +221,95 @@ if (!existsSync(CHROME)) {
   process.exit(1);
 }
 
+// --- automated remediation (New Relic pulls the kill switch) -------------------------------------
+
+const auto = args['auto-remediation'];
+// The trigger New Relic's workflow calls has its own id (see terraform/outputs.tf); reading it from
+// state, rather than hardcoding it, means a re-created trigger (new id, new URL) is picked up
+// automatically.
+const NR_TRIGGER_ID = auto
+  ? spawnSync('terraform', ['-chdir=terraform', 'output', '-raw', 'new_relic_trigger_id'], { encoding: 'utf8' }).stdout.trim()
+  : null;
+const nerdgraph = auto && nerdGraphClient({ userKey: process.env.NR_USER_KEY, url: process.env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
+
+async function flagIsOn() {
+  const project = process.env.LD_PROJECT_KEY ?? 'default';
+  const environment = process.env.LD_ENV_KEY ?? 'test';
+  const res = await fetch(`https://app.launchdarkly.com/api/v2/flags/${project}/premium-video-tutorials?env=${environment}`, {
+    headers: { Authorization: process.env.LD_API_TOKEN },
+  });
+  return (await res.json()).environments?.[environment]?.on;
+}
+
+// The flag going off does not by itself say WHO turned it off: the page's kill-switch button and
+// New Relic's workflow are two separate triggers, and nothing stops a person from pressing the
+// button while this is waiting for New Relic (tested: it happened, and "the flag went off" alone
+// would have wrongly reported it as the automated path). Checking the New Relic trigger's own
+// _lastTriggeredAt is how the script knows which one actually fired.
+async function newRelicTriggerFiredAfter(since) {
+  const project = process.env.LD_PROJECT_KEY ?? 'default';
+  const environment = process.env.LD_ENV_KEY ?? 'test';
+  const res = await fetch(`https://app.launchdarkly.com/api/v2/flags/${project}/premium-video-tutorials/triggers/${environment}`, {
+    headers: { Authorization: process.env.LD_API_TOKEN },
+  });
+  const { items = [] } = await res.json();
+  const ours = items.find((trigger) => trigger._id === NR_TRIGGER_ID);
+  return ours && ours._lastTriggeredAt > since ? ours._lastTriggeredAt : null;
+}
+
+// Is a rage-click issue that started during this run still open?
+async function openIssueSince(since) {
+  const data = await nerdgraph(`query($acc: Int!, $from: EpochMilliseconds!, $to: EpochMilliseconds!) { actor { account(id: $acc) {
+    aiIssues { issues(timeWindow: { startTime: $from, endTime: $to }) { issues { state conditionName activatedAt } } } } } }`,
+  { acc: Number(process.env.NR_ACCOUNT_ID), from: since, to: Date.now() });
+  const ours = data.actor.account.aiIssues.issues.issues.filter((i) => i.conditionName?.includes('Rage Click') && i.activatedAt >= since);
+  return ours.some((i) => i.state !== 'CLOSED');
+}
+
+// Polls every 10 seconds; returns the time it became true, or null on timeout.
+async function waitFor(check, timeoutMs) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if (await check().catch(() => false)) return Date.now();
+    await wait(10_000);
+  }
+  return null;
+}
+
+let restoreAutoRemediation = null;
+if (auto) {
+  if (!process.env.NR_USER_KEY || !process.env.NR_ACCOUNT_ID) {
+    console.error('--auto-remediation needs NR_USER_KEY and NR_ACCOUNT_ID in .env (and npm run newrelic run once).');
+    process.exit(1);
+  }
+  if (!NR_TRIGGER_ID) {
+    console.error('Could not read new_relic_trigger_id from Terraform output. Run npm run setup (or terraform apply) first.');
+    process.exit(1);
+  }
+  const before = await autoRemediationEnabled(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID });
+  if (before === null) {
+    console.error('There is no automated kill switch in New Relic yet: run npm run newrelic first.');
+    process.exit(1);
+  }
+  await setAutoRemediation(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID, enabled: true });
+  say(`Automated kill switch ON for this run (it was ${before ? 'on' : 'off'}; it goes back afterwards). Alert signal: ${RAGE_CLICK_SIGNAL.aggregationMethod}, empty windows = ${RAGE_CLICK_SIGNAL.fillValue}.`);
+  restoreAutoRemediation = async () => {
+    restoreAutoRemediation = null;
+    await setAutoRemediation(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID, enabled: before });
+    say(`Automated kill switch back ${before ? 'on' : 'off'}.`);
+  };
+  // Put it back even if the run is stopped halfway, so the demo's manual kill switch is never beaten to it.
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.once(signal, async () => {
+      await restoreAutoRemediation?.().catch((err) => console.error(`Could not switch it back: ${err.message}. Run npm run newrelic -- --auto-remediation off`));
+      process.exit(130);
+    });
+  }
+}
+
 const started = Date.now();
+let incidentAt = started;
+try {
 
 say('1. Releasing the feature: premium-video-tutorials ON');
 await turnFlagOn();
@@ -227,6 +321,7 @@ say(`   Quiet for ${args.calm}s, so the release and the errors are not the same 
 await wait(num('calm') * 1000);
 
 say(`3. The bad release reaches ${num('users')} customers, who start rage-clicking`);
+incidentAt = Date.now();
 const hit = await crowd({
   visitors: names('shopper', num('users'), num('healthy') + 1),
   chaos: true,
@@ -238,12 +333,35 @@ const clicks = hit.reduce((total, r) => total + (r.clicked ?? 0), 0);
 say(`   ${hit.filter((r) => r.sawBrokenCard).length} customers hit the broken card, ${clicks} rage clicks between them`);
 if (!clicks) say('   No clicks landed: is the flag on, and is the app running at the URL above?');
 
-say(`4. Leaving it broken for ${args.detect}s, the way a real incident waits to be noticed`);
-await wait(num('detect') * 1000);
+if (!auto) {
+  say(`4. Leaving it broken for ${args.detect}s, the way a real incident waits to be noticed`);
+  await wait(num('detect') * 1000);
+}
 
-say('5. Firing the kill switch');
-await fireKillSwitch();
-await wait(5000); // the flag change reaches the SDK, which marks it on both New Relic entities
+if (auto) {
+  say('5. Waiting for New Relic: the alert opens an issue, the workflow fires the trigger');
+  // incidentAt (when rage-clicking started), not Date.now() here: the alert fires in roughly 20s
+  // now, often faster than step 3's clicks finish dispatching, so a baseline taken only at the
+  // start of this wait can be LATER than a trigger that already fired legitimately during step 3.
+  // Confirmed: a real, correctly-labelled New Relic firing was missed and reported as a timeout
+  // because of exactly this.
+  let firedAt = null;
+  const offAt = await waitFor(async () => {
+    firedAt = await newRelicTriggerFiredAfter(incidentAt);
+    return firedAt !== null;
+  }, num('remediate-timeout') * 1000);
+  if (!offAt) {
+    // The flag may still have gone off some other way (for example someone pressed the page's
+    // button); say so plainly rather than silently crediting New Relic for a change it did not make.
+    const otherwise = (await flagIsOn()) === false ? ' (the flag IS off, but not via the New Relic trigger: did someone press the kill switch manually?)' : '';
+    throw new Error(`New Relic's trigger did not fire within ${args['remediate-timeout']}s${otherwise}`);
+  }
+  say(`   New Relic's trigger fired ${Math.round((firedAt - incidentAt) / 1000)}s after the bad release reached customers. Nobody pressed anything.`);
+} else {
+  say('5. Firing the kill switch');
+  await fireKillSwitch();
+}
+await wait(5000); // the flag change reaches New Relic as a change event
 
 say(`6. ${num('recovery')} more customers arrive, and the page works again`);
 await crowd({
@@ -254,11 +372,24 @@ await crowd({
   spreadMs: 10000,
 });
 
+if (auto) {
+  // The fill on the alert's signal (newrelic-lib.mjs) is what lets this happen: with no rage
+  // clicks after the fix, empty windows count as 0 and the issue recovers on its own.
+  say('7. Waiting for New Relic to close the issue now that the rage clicks have stopped');
+  const closedAt = await waitFor(async () => (await openIssueSince(started)) === false, 15 * 60 * 1000);
+  say(closedAt
+    ? `   The issue closed by itself ${Math.round((closedAt - started) / 60000)} minutes into the run.`
+    : '   The issue is still open after 15 minutes: check the alert condition\'s fill option (npm run newrelic fixes it).');
+}
+
 const minutes = ((Date.now() - started) / 60000).toFixed(1);
 console.log(`
-Done in ${minutes} minutes. The flag is OFF, the way the kill switch left it.
+Done in ${minutes} minutes. The flag is OFF, the way the ${auto ? 'automated' : ''} kill switch left it.
 
 In New Relic, open the Browser entity (Canine Good Citizen) and set the time range to the last 30
 minutes. The JavaScript error chart should show the quiet start, the spike while customers were
-rage-clicking, the "turned OFF by the kill switch" marker, and clean traffic after it. Errors can
-take a minute or two to appear.`);
+rage-clicking, the flag-change markers (switch on "Related Changes" on Browser charts), and clean
+traffic after them. Errors can take a minute or two to appear.`);
+} finally {
+  await restoreAutoRemediation?.();
+}

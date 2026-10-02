@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { EXPERIMENTS, createApi, envFromTerraformOutputs, inspectTerraformState, mergeEnv, stepAiConfigTargeting, stepExperiment } from './setup-lib.mjs';
 import { setupOllama } from './ollama.mjs';
+import { setUpNewRelic } from './newrelic-lib.mjs';
 import { TOKEN_HELP, getApiToken } from './token.mjs';
 
 if (existsSync('.env')) process.loadEnvFile('.env'); // real shell variables win over .env
@@ -111,6 +112,13 @@ report('canine-coach-chatbot', await stepAiConfigTargeting(ctx));
 if (!args['no-experiments']) {
   console.log('\n   Experiments (created and started)');
   for (const def of EXPERIMENTS) report(def.key, await stepExperiment(ctx, def));
+}
+
+// Optional: only with NR_USER_KEY in .env. The automated kill switch is created OFF, so a live demo
+// stays manual; npm run newrelic -- --auto-remediation on switches it on.
+if (process.env.NR_USER_KEY && process.env.NR_ACCOUNT_ID) {
+  console.log('\n   New Relic (flag changes as change events; rage-click alert; automated kill switch, off)');
+  for (const [step, r] of await setUpNewRelic({ token, project: args.project })) report(step, r);
 }
 
 console.log('\n4. Local chatbot models (Ollama)');

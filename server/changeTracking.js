@@ -1,33 +1,91 @@
-// Marks LaunchDarkly flag changes on New Relic entities (optional, Integrations).
+// Marks LaunchDarkly flag changes on New Relic entities, from the chat backend (optional, OFF by
+// default).
 //
-// Why this exists: LaunchDarkly ships a New Relic integration that is meant to write every flag
-// change into New Relic, but it posts to an API New Relic has retired, so nothing arrives (see the
-// README). This is the workaround. The chat backend already holds a LaunchDarkly server SDK
-// connection, which emits an event whenever a flag is edited, so it posts the change to New Relic's
-// NerdGraph API itself, as a change tracking event of category FEATURE_FLAG.
+// The preferred way to get flag changes into New Relic is LaunchDarkly's own New Relic integration
+// (`new-relic-apm-v2`), which `npm run setup` creates when NR_USER_KEY is set: LaunchDarkly writes a
+// FEATURE_FLAG change tracking event for every flag change, on both the APM and the Browser entity,
+// without this app having to run. See the README.
 //
-// It posts one event per entity, to BOTH the APM entity (the Node backend) and the Browser entity
-// (the React app), because New Relic attaches markers per entity: a marker on the APM service does
-// not show on the browser charts. That is what makes "the flag flipped here" line up with the error
-// spike on either chart.
+// This module is the older, app-side way, kept as a fallback for accounts without that
+// integration. The chat backend holds a LaunchDarkly server SDK connection, which emits an event
+// whenever a flag is edited, and posts the change to New Relic's NerdGraph API itself. Running both
+// would mark every change twice, so this only runs when asked for:
 //
-// Needs, in .env:
-//   NR_API_KEY       a New Relic USER key (starts with NRAK-). Not the license or browser key:
-//                    those can only send telemetry, and NerdGraph rejects them.
-//   NR_ACCOUNT_ID    the same account id the agents already use.
+//   NR_BACKEND_CHANGE_TRACKING=true   switch this on
+//   NR_USER_KEY                       a New Relic USER key (starts with NRAK-). Not the license or
+//                                     browser key: those can only send telemetry.
+//   NR_ACCOUNT_ID                     the same account id the agents already use.
 // Optional:
 //   NR_APM_ENTITY_GUID, NR_BROWSER_ENTITY_GUID   skip the lookup and use these exact entities.
 //   NR_API_URL       for EU accounts: https://api.eu.newrelic.com/graphql
-//
-// With no NR_API_KEY this module does nothing at all, like the rest of the New Relic support.
 const DEFAULT_URL = 'https://api.newrelic.com/graphql';
+const LD_API = 'https://app.launchdarkly.com/api/v2';
 const LOOKUP_TIMEOUT_MS = 5_000;
+// Only a trigger fired in roughly the last few seconds explains the change; an older firing is
+// some earlier, unrelated event and must not be quoted as if it just happened.
+const TRIGGER_FRESHNESS_MS = 15_000;
 
 const nerdGraphUrl = () => process.env.NR_API_URL ?? DEFAULT_URL;
 
-// Change tracking needs a user key; the agents' license keys cannot call NerdGraph.
+// Off unless asked for (the LaunchDarkly integration does this job), and it needs a user key: the
+// agents' license keys cannot call NerdGraph.
 export function changeTrackingEnabled(env = process.env) {
-  return Boolean(env.NR_API_KEY && (env.NR_ACCOUNT_ID || (env.NR_APM_ENTITY_GUID && env.NR_BROWSER_ENTITY_GUID)));
+  return env.NR_BACKEND_CHANGE_TRACKING === 'true'
+    && Boolean(env.NR_USER_KEY && (env.NR_ACCOUNT_ID || (env.NR_APM_ENTITY_GUID && env.NR_BROWSER_ENTITY_GUID)));
+}
+
+// LaunchDarkly's own "Generic trigger made changes to the flag ..." text is identical for every
+// generic-trigger flag trigger: the trigger object has no name or description field to tell two
+// of them apart, so that sentence alone cannot say which trigger fired. The caller CAN give a
+// trigger an eventName on each POST, though (see server/index.js, scripts/simulate-incident.mjs),
+// and LaunchDarkly echoes the most recent one back on the flag's /triggers endpoint. Reading that
+// back is the only way to put an unambiguous "which trigger" into a New Relic marker.
+export async function latestTriggerEventName({ flagKey, project, environment, token, fetchImpl = fetch }) {
+  if (!token) return null;
+  try {
+    const res = await fetchImpl(`${LD_API}/flags/${project}/${flagKey}/triggers/${environment}`, {
+      headers: { Authorization: token },
+      signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const { items = [] } = await res.json();
+    const latest = items
+      .filter((trigger) => Date.now() - trigger._lastTriggeredAt < TRIGGER_FRESHNESS_MS)
+      .sort((a, b) => b._lastTriggeredAt - a._lastTriggeredAt)[0];
+    return latest?._recentTriggerBodies?.[0]?.jsonBody?.eventName ?? null;
+  } catch {
+    return null; // a marker without the cause still beats no marker
+  }
+}
+
+// Strips LaunchDarkly's markdown out of an audit-log title: [text](url) -> text, `code` -> code,
+// and the backslash-escaped parentheses LaunchDarkly puts around "(via API)".
+function plainText(markdown) {
+  return markdown
+    .replace(/\\([()])/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1');
+}
+
+// The general case `latestTriggerEventName` does not cover: a flag edited directly, in the
+// LaunchDarkly UI or by a plain API call, with no trigger involved at all. LaunchDarkly's own audit
+// log already has a clear one-line summary of this ("Albert Lim updated Premium Video Tutorials in
+// 'Test'", or "... turned on the flag ... (via API)"); reading it back is what turns our own New
+// Relic marker from a bare "turned ON" into something that says who did it and how.
+export async function latestAuditTitle({ flagKey, token, fetchImpl = fetch }) {
+  if (!token) return null;
+  try {
+    const res = await fetchImpl(`${LD_API}/auditlog?q=${encodeURIComponent(flagKey)}&limit=1`, {
+      headers: { Authorization: token },
+      signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    const [latest] = (await res.json()).items ?? [];
+    if (!latest || Date.now() - latest.date > TRIGGER_FRESHNESS_MS) return null;
+    return latest.title ? plainText(latest.title) : null;
+  } catch {
+    return null; // a marker without the cause still beats no marker
+  }
 }
 
 // Finds the APM and Browser entities by the name the agents report under. Both agents in this
@@ -50,11 +108,10 @@ const safe = (value) => String(value ?? '').replace(/[^\w.-]/g, '');
 //
 // Every value except the custom attributes goes through GraphQL variables rather than string
 // interpolation, so a quote in a flag key or a description cannot break the query.
-export function flagChangeEvent({ guid, flagKey, state, viaKillSwitch = false, project, environment }) {
-  const label = state === 'on' ? 'turned ON' : state === 'off' ? 'turned OFF' : 'changed';
-  const where = `project ${project}, environment ${environment}`;
-  return {
-    query: `mutation($query: String!, $flagKey: String!, $user: String!, $shortDescription: String!, $description: String!) {
+// customAttributes is a GraphQL custom scalar; NerdGraph only accepts it as an inline literal in
+// the query text, not through a $variable (confirmed by testing), which is why its few values go
+// through `safe()` below rather than the $variables object the rest of this mutation uses.
+const flagChangeMutation = (customAttributes) => `mutation($query: String!, $flagKey: String!, $user: String!, $shortDescription: String!, $description: String!) {
   changeTrackingCreateEvent(changeTrackingEvent: {
     categoryAndTypeData: {
       categoryFields: { featureFlag: { featureFlagId: $flagKey } }
@@ -65,31 +122,56 @@ export function flagChangeEvent({ guid, flagKey, state, viaKillSwitch = false, p
     shortDescription: $shortDescription
     description: $description
     customAttributes: {
-      flagKey: "${safe(flagKey)}"
-      flagState: "${safe(state ?? 'unknown')}"
-      trigger: "${viaKillSwitch ? 'kill-switch' : 'manual'}"
-      project: "${safe(project)}"
-      environment: "${safe(environment)}"
+      flagKey: "${safe(customAttributes.flagKey)}"
+      flagState: "${safe(customAttributes.flagState)}"
+      trigger: "${safe(customAttributes.trigger)}"
+      project: "${safe(customAttributes.project)}"
+      environment: "${safe(customAttributes.environment)}"
       source: "sit-stay-ship"
     }
   }) {
     changeTrackingEvent { changeTrackingId }
   }
-}`,
+}`;
+
+// `state` is the flag's on/off switch after the change ("on", "off", or undefined if it could not
+// be read). `triggerEventName`, read back from the trigger that just fired (see
+// latestTriggerEventName above), is the exact, unambiguous cause: it is what tells "the page's
+// kill-switch button" apart from "New Relic fired this on its own" apart from any other trigger,
+// because LaunchDarkly's own text ("Generic trigger made changes to the flag ...") is identical
+// for every trigger of the same type and cannot say which one it was. `viaKillSwitch` is the
+// fallback guess from timing alone, used only when no eventName could be read back.
+export function flagChangeEvent({ guid, flagKey, state, viaKillSwitch = false, triggerEventName, auditTitle, project, environment }) {
+  const label = state === 'on' ? 'turned ON' : state === 'off' ? 'turned OFF' : 'changed';
+  const where = `project ${project}, environment ${environment}`;
+  // Most to least specific: the trigger's own eventName (exact, when a trigger fired); failing
+  // that, LaunchDarkly's own audit-log summary (covers a plain UI or API edit); failing that, the
+  // old guess from timing alone, clearly marked as unconfirmed rather than stated as fact.
+  const cause = triggerEventName ?? auditTitle ?? (viaKillSwitch ? 'the kill switch (cause unconfirmed: no recent trigger eventName found)' : null);
+  const source = triggerEventName ? 'named-trigger' : auditTitle ? 'audit-log' : viaKillSwitch ? 'kill-switch-guessed' : 'manual';
+
+  return {
+    query: flagChangeMutation({
+      flagKey,
+      flagState: state ?? 'unknown',
+      trigger: source,
+      project,
+      environment,
+    }),
     variables: {
       // The mutation's own search has to resolve to exactly one entity, so it matches on the GUID.
       query: `id = '${guid}'`,
       flagKey,
-      user: viaKillSwitch ? 'LaunchDarkly kill switch' : 'LaunchDarkly (sit-stay-ship)',
-      shortDescription: viaKillSwitch ? `${flagKey} turned OFF by the kill switch` : `${flagKey} ${label}`,
-      description: viaKillSwitch
-        ? `The kill switch fired: the flag "${flagKey}" was turned OFF in LaunchDarkly to stop a bad release, with no deploy (${where}).`
+      user: triggerEventName ? 'LaunchDarkly trigger' : auditTitle ? 'LaunchDarkly' : viaKillSwitch ? 'LaunchDarkly kill switch' : 'LaunchDarkly (sit-stay-ship)',
+      shortDescription: cause ? `${flagKey} ${label}: ${cause}` : `${flagKey} ${label}`,
+      description: cause
+        ? `The flag "${flagKey}" was ${label} (${where}). Cause: ${cause}.`
         : `The LaunchDarkly flag "${flagKey}" was ${label} (${where}).`,
     },
   };
 }
 
-async function postNerdGraph(body, { fetchImpl = fetch, apiKey = process.env.NR_API_KEY, timeoutMs } = {}) {
+async function postNerdGraph(body, { fetchImpl = fetch, apiKey = process.env.NR_USER_KEY, timeoutMs } = {}) {
   const res = await fetchImpl(nerdGraphUrl(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'API-Key': apiKey },
@@ -122,7 +204,7 @@ export async function resolveEntityGuids({ fetchImpl = fetch, env = process.env 
   const name = env.NR_APM_APP_NAME ?? 'Canine Good Citizen';
   const data = await postNerdGraph(
     { query: entitySearchQuery({ name, accountId: env.NR_ACCOUNT_ID }) },
-    { fetchImpl, apiKey: env.NR_API_KEY, timeoutMs: LOOKUP_TIMEOUT_MS },
+    { fetchImpl, apiKey: env.NR_USER_KEY, timeoutMs: LOOKUP_TIMEOUT_MS },
   );
   const found = guidsFromSearch(data);
   cached = { apm: fromEnv.apm ?? found.apm, browser: fromEnv.browser ?? found.browser };
@@ -130,7 +212,7 @@ export async function resolveEntityGuids({ fetchImpl = fetch, env = process.env 
 }
 
 // Posts one change event per entity. Returns which entities got a marker, so the caller can log it.
-export async function recordFlagChange(flagKey, { state, viaKillSwitch = false, fetchImpl = fetch, env = process.env } = {}) {
+export async function recordFlagChange(flagKey, { state, viaKillSwitch = false, triggerEventName, auditTitle, fetchImpl = fetch, env = process.env } = {}) {
   const guids = await resolveEntityGuids({ fetchImpl, env });
   const targets = Object.entries(guids).filter(([, guid]) => guid);
   if (!targets.length) throw new Error('no APM or Browser entity found in New Relic for this app name');
@@ -143,10 +225,12 @@ export async function recordFlagChange(flagKey, { state, viaKillSwitch = false, 
           flagKey,
           state,
           viaKillSwitch,
+          triggerEventName,
+          auditTitle,
           project: env.LD_PROJECT_KEY ?? 'default',
           environment: env.LD_ENV_KEY ?? 'test',
         }),
-        { fetchImpl, apiKey: env.NR_API_KEY },
+        { fetchImpl, apiKey: env.NR_USER_KEY },
       ),
     ),
   );

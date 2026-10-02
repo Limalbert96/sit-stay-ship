@@ -16,7 +16,8 @@
     "teardown": "node scripts/teardown.mjs",
     "experiments": "node scripts/experiments.mjs",
     "ollama": "node scripts/ollama-setup.mjs",
-    "incident": "node scripts/simulate-incident.mjs"
+    "incident": "node scripts/simulate-incident.mjs",
+    "newrelic": "node scripts/newrelic.mjs"
   },
   "dependencies": {
     "@launchdarkly/node-server-sdk": "^9.13.6",

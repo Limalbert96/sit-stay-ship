@@ -17,7 +17,7 @@ import { initAi, LDFeedbackKind } from '@launchdarkly/server-sdk-ai';
 import { findPersona, toContext } from '../src/shared/personas.js';
 import { sdkKey } from './env.js';
 import { generateReply, resolveProvider, warmUp } from './llm.js';
-import { changeTrackingEnabled, recordFlagChange } from './changeTracking.js';
+import { changeTrackingEnabled, latestAuditTitle, latestTriggerEventName, recordFlagChange } from './changeTracking.js';
 
 const PORT = Number(process.env.PORT ?? 3001);
 // Server-side SDK key (LD_SDK_KEY in .env).
@@ -45,8 +45,10 @@ if (SDK_KEY) {
   console.warn('No LD_SDK_KEY in .env: using the local fallback config, no metrics are sent.');
 }
 
-// Optional (Integrations): mark every flag change on the New Relic APM and Browser entities, which
-// is what LaunchDarkly's own New Relic integration would do if its API still worked. The SDK raises
+// Optional, off by default (NR_BACKEND_CHANGE_TRACKING=true): mark every flag change on the New
+// Relic APM and Browser entities from here. LaunchDarkly's own New Relic integration
+// (new-relic-apm-v2, created by npm run setup) does the same job without this app running, so this
+// is only a fallback; running both would mark each change twice. The SDK raises
 // "update" whenever a flag is edited in LaunchDarkly, from the UI, the API or the kill-switch
 // trigger. Failures only warn: a demo must not depend on New Relic being reachable.
 
@@ -76,9 +78,19 @@ if (ldClient && changeTrackingEnabled()) {
   ldClient.on('update', async ({ key }) => {
     const state = await flagState(key);
     const viaKillSwitch = state === 'off' && Date.now() - killSwitchFiredAt < KILL_SWITCH_WINDOW_MS;
-    recordFlagChange(key, { state, viaKillSwitch })
+    // Reads back whichever trigger (ours, or New Relic's own) most recently fired on this flag, so
+    // the New Relic marker can say exactly which one caused this change, not just "a trigger did".
+    const triggerEventName = await latestTriggerEventName({
+      flagKey: key, project: process.env.LD_PROJECT_KEY ?? 'default', environment: process.env.LD_ENV_KEY ?? 'test', token: process.env.LD_API_TOKEN,
+    });
+    // Only worth asking when no trigger explains the change: a plain UI or API edit has no trigger
+    // body to read, but LaunchDarkly's audit log already has a one-line summary of it.
+    const auditTitle = triggerEventName ? null : await latestAuditTitle({
+      flagKey: key, project: process.env.LD_PROJECT_KEY ?? 'default', token: process.env.LD_API_TOKEN,
+    });
+    recordFlagChange(key, { state, viaKillSwitch, triggerEventName, auditTitle })
       .then(({ marked }) => console.log(
-        `Marked "${key}" ${state ? `turned ${state.toUpperCase()}` : 'changed'}${viaKillSwitch ? ' (kill switch)' : ''} on New Relic (${marked.join(' and ')}).`,
+        `Marked "${key}" ${triggerEventName ?? auditTitle ?? (state ? `turned ${state.toUpperCase()}` : 'changed')} on New Relic (${marked.join(' and ')}).`,
       ))
       .catch((err) => console.warn(`Could not mark "${key}" on New Relic: ${err.message}`));
   });
@@ -165,7 +177,13 @@ app.post('/api/kill-switch', async (_req, res) => {
   const url = process.env.LD_TRIGGER_URL;
   if (!url) return res.status(501).json({ error: 'LD_TRIGGER_URL is not set in .env' });
   try {
-    const result = await fetch(url, { method: 'POST' });
+    // A trigger records the request's `eventName` in LaunchDarkly's flag history ("<eventName> was
+    // triggered"), which is how a manual press is told apart from New Relic firing its own trigger.
+    const result = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventName: 'Manual kill switch: pressed on the CGC Prep page' }),
+    });
     if (result.ok) killSwitchFiredAt = Date.now(); // labels the flag change this causes (see above)
     res.status(result.ok ? 200 : 502).json({ fired: result.ok, status: result.status });
   } catch {
