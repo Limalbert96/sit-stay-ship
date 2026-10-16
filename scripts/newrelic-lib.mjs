@@ -5,6 +5,7 @@
 //    one New Relic application, so there are two, named after the entity: "<app> [APM]" for the
 //    Node service and "<app> [Browser]" for the React page. The Browser app also CALLS the APM
 //    service, so APM markers show on Browser charts under "Related Changes" as well.
+//    Pointed at the application by its entity.guid, which NerdGraph returns (nothing goes in .env).
 //    Created through the LaunchDarkly REST API: the Terraform provider (3.1.x) only accepts the
 //    integration keys compiled into it, and this one is newer than that list.
 //
@@ -19,7 +20,7 @@
 // Steps return { status: 'created' | 'exists' | 'manual', detail } and never throw, like setup-lib.
 
 import { spawnSync } from 'node:child_process';
-import { createApi } from './setup-lib.mjs';
+import { createApi, tearDownSubscriptions } from './setup-lib.mjs';
 import { resolveEntityGuids } from '../server/changeTracking.js';
 
 export const NEW_RELIC_INTEGRATION = 'new-relic-apm-v2';
@@ -34,39 +35,33 @@ export const WORKFLOW_NAME = 'Rage click -> LaunchDarkly kill switch';
 export const DESTINATION_NAME = 'LaunchDarkly kill switch (rage click alert)';
 export const CHANNEL_NAME = 'LaunchDarkly kill switch webhook (workflows)';
 
-// An entity GUID is base64 of "account|DOMAIN|TYPE|id"; the integration wants the numeric id.
-export function appIdFromGuid(guid) {
-  const parts = Buffer.from(guid, 'base64').toString('utf8').split('|');
-  return parts.length === 4 && /^\d+$/.test(parts[3]) ? parts[3] : null;
-}
-
 // ---- 1. LaunchDarkly's New Relic integration ---------------------------------------------
 
 // The integration's default policy covers only the production environment. This demo runs in
 // test, so the subscription covers every environment of this one project instead.
-export function subscriptionBody({ kind, userKey, appId, domain, project, appName }) {
+export function subscriptionBody({ kind, userKey, guid, domain, project, appName }) {
   return {
     name: subscriptionName(kind, appName),
     on: true,
     tags: ['cgc-prep'],
-    config: { apiKey: userKey, applicationId: String(appId), domain },
+    config: { apiKey: userKey, entityGuid: guid, domain },
     statements: [{ effect: 'allow', actions: ['*'], resources: [`proj/${project}:env/*:flag/*`] }],
   };
 }
 
-export async function stepNewRelicIntegration({ api, project }, { userKey, appIds, domain = 'api.newrelic.com', appName }) {
+export async function stepNewRelicIntegration({ api, project }, { userKey, guids, domain = 'api.newrelic.com', appName }) {
   const list = await api('GET', `/integrations/${NEW_RELIC_INTEGRATION}`);
   if (list.status === 404) {
     return [{ status: 'manual', detail: `the ${NEW_RELIC_INTEGRATION} integration is not available in this LaunchDarkly account` }];
   }
   const existing = list.data?.items ?? [];
   const results = [];
-  for (const [kind, appId] of Object.entries(appIds)) {
-    if (!appId) {
+  for (const [kind, guid] of Object.entries(guids)) {
+    if (!guid) {
       results.push({ status: 'manual', detail: `no New Relic ${kind} application found, so nothing to mark it on` });
       continue;
     }
-    const body = subscriptionBody({ kind, userKey, appId, domain, project, appName });
+    const body = subscriptionBody({ kind, userKey, guid, domain, project, appName });
     const found = existing.find((s) => s.name === body.name || s.name === legacyName(kind));
     if (found) {
       // JSON patch: bring an existing subscription back to this config (the key may have rotated).
@@ -77,35 +72,20 @@ export async function stepNewRelicIntegration({ api, project }, { userKey, appId
         { op: 'replace', path: '/on', value: true },
       ]);
       results.push(res.status >= 200 && res.status < 300
-        ? { status: 'exists', detail: `${kind}: "${body.name}" (application ${appId})` }
+        ? { status: 'exists', detail: `${kind}: "${body.name}" (entity.guid ${guid})` }
         : { status: 'manual', detail: `${kind}: could not update "${body.name}" (LaunchDarkly answered ${res.status}: ${res.data?.message ?? 'no message'})` });
       continue;
     }
     const res = await api('POST', `/integrations/${NEW_RELIC_INTEGRATION}`, body);
     results.push(res.status >= 200 && res.status < 300
-      ? { status: 'created', detail: `${kind}: "${body.name}" (application ${appId})` }
+      ? { status: 'created', detail: `${kind}: "${body.name}" (entity.guid ${guid})` }
       : { status: 'manual', detail: `${kind}: could not create "${body.name}" (LaunchDarkly answered ${res.status}: ${res.data?.message ?? 'no message'})` });
   }
   return results;
 }
 
-export async function tearDownNewRelicIntegration({ api }) {
-  const list = await api('GET', `/integrations/${NEW_RELIC_INTEGRATION}`);
-  // Ours carry the cgc-prep tag (set by subscriptionBody), whatever they are named.
-  const ours = (list.data?.items ?? []).filter((s) => s.tags?.includes('cgc-prep') || s.name?.startsWith('CGC Prep: flag changes to New Relic'));
-  const results = [];
-  for (const s of ours) {
-    const res = await api('DELETE', `/integrations/${NEW_RELIC_INTEGRATION}/${s._id}`);
-    if (res.status === 0) {
-      results.push({ status: 'exists', detail: `would delete the New Relic subscription "${s.name}"` }); // dry run
-      continue;
-    }
-    results.push(res.status >= 200 && res.status < 300 || res.status === 404
-      ? { status: 'created', detail: `deleted the New Relic subscription "${s.name}"` }
-      : { status: 'manual', detail: `could not delete "${s.name}" (LaunchDarkly answered ${res.status})` });
-  }
-  return results;
-}
+export const tearDownNewRelicIntegration = (ctx) =>
+  tearDownSubscriptions(ctx, { integration: NEW_RELIC_INTEGRATION, label: 'New Relic', legacyName: 'CGC Prep: flag changes to New Relic' });
 
 // ---- 2. New Relic alert and automated kill switch ------------------------------------------
 
@@ -310,6 +290,55 @@ export async function autoRemediationEnabled(nerdgraph, { accountId }) {
   return workflow ? workflow.workflowEnabled : null;
 }
 
+// Removes what stepRageClickAlert and stepAutoRemediation made, in the order New Relic allows:
+// the workflow first, then its channel, then the destination (it cannot go while a channel uses it).
+// The alert goes last. When the condition sits in the policy this project made, that whole policy
+// is deleted (which removes the condition); a condition adopted into someone else's policy is
+// deleted alone, and the policy is left. `dryRun` only reports.
+export async function tearDownNewRelicAlerting(nerdgraph, { accountId, dryRun = false }) {
+  const acc = Number(accountId);
+  const results = [];
+  const remove = async (what, mutation, variables) => {
+    try {
+      if (!dryRun) await nerdgraph(mutation, { acc, ...variables });
+      results.push({ status: dryRun ? 'exists' : 'created', detail: `${dryRun ? 'would delete' : 'deleted'} ${what}` });
+    } catch (err) {
+      results.push({ status: 'manual', detail: `could not delete ${what} (${err.message})` });
+    }
+  };
+  try {
+    const { destination, channel, workflow } = await lookUp(nerdgraph, acc);
+    if (workflow) {
+      await remove(`the New Relic workflow "${WORKFLOW_NAME}"`,
+        'mutation($acc: Int!, $id: ID!) { aiWorkflowsDeleteWorkflow(accountId: $acc, id: $id, deleteChannels: false) { __typename } }', { id: workflow.id });
+    }
+    if (channel) {
+      await remove(`the New Relic channel "${CHANNEL_NAME}"`,
+        'mutation($acc: Int!, $id: ID!) { aiNotificationsDeleteChannel(accountId: $acc, channelId: $id) { __typename } }', { id: channel.id });
+    }
+    if (destination) {
+      await remove(`the New Relic destination "${DESTINATION_NAME}"`,
+        'mutation($acc: Int!, $id: ID!) { aiNotificationsDeleteDestination(accountId: $acc, destinationId: $id) { __typename } }', { id: destination.id });
+    }
+    const condition = await findCondition(nerdgraph, acc);
+    if (condition) {
+      const { actor } = await nerdgraph('query($acc: Int!, $id: ID!) { actor { account(id: $acc) { alerts { policy(id: $id) { id name } } } } }', { acc, id: condition.policyId });
+      const policy = actor.account.alerts.policy;
+      if (policy?.name === ALERT_POLICY_NAME) {
+        await remove(`the New Relic alert policy "${ALERT_POLICY_NAME}" and its "${ALERT_CONDITION_NAME}" alert`,
+          'mutation($acc: Int!, $id: ID!) { alertsPolicyDelete(accountId: $acc, id: $id) { __typename } }', { id: policy.id });
+      } else {
+        await remove(`the New Relic alert "${ALERT_CONDITION_NAME}" (its policy "${policy?.name}" is left alone)`,
+          'mutation($acc: Int!, $id: ID!) { alertsConditionDelete(accountId: $acc, id: $id) { __typename } }', { id: condition.id });
+      }
+    }
+  } catch (err) {
+    results.push({ status: 'manual', detail: `could not look up the New Relic alert and workflow (${err.message})` });
+  }
+  if (!results.length) results.push({ status: 'exists', detail: 'no New Relic alert, workflow, channel or destination of this project found' });
+  return results;
+}
+
 // ---- Both halves together (npm run setup and npm run newrelic) -----------------------------
 
 // Returns [stepName, result] pairs. `enabled` is only applied to a workflow being created or when
@@ -323,7 +352,7 @@ export async function setUpNewRelic({ token, project, enabled } = {}) {
   const domain = (env.NR_API_URL ?? '').includes('.eu.') ? 'api.eu.newrelic.com' : 'api.newrelic.com';
   const nerdgraph = nerdGraphClient({ userKey: env.NR_USER_KEY, url: env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
 
-  // 1. LaunchDarkly -> New Relic: flag changes as change tracking events on the APM entity.
+  // 1. LaunchDarkly -> New Relic: flag changes as change tracking events on the APM and Browser applications.
   let guids = {};
   try {
     guids = await resolveEntityGuids({ env: { ...env } });
@@ -333,7 +362,7 @@ export async function setUpNewRelic({ token, project, enabled } = {}) {
   const api = createApi({ token });
   for (const r of await stepNewRelicIntegration({ api, project }, {
     userKey: env.NR_USER_KEY,
-    appIds: { apm: guids.apm && appIdFromGuid(guids.apm), browser: guids.browser && appIdFromGuid(guids.browser) },
+    guids,
     domain,
     appName: env.NR_APM_APP_NAME ?? 'Canine Good Citizen',
   })) results.push(['LaunchDarkly -> New Relic', r]);

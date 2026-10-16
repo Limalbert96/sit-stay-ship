@@ -14,10 +14,10 @@ import { spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { parseArgs } from 'node:util';
 import {
-  AI_CONFIG_KEY, DEMO_FLAG_KEYS, DEMO_METRIC_KEYS, createApi, deleteIfPresent, mergeEnv, tearDownExperiments,
+  AI_CONFIG_KEY, DEMO_FLAG_KEYS, DEMO_METRIC_KEYS, createApi, deleteIfPresent, mergeEnv, tearDownExperiments, tearDownSlackSubscription,
 } from './setup-lib.mjs';
 import { TOKEN_HELP, getApiToken } from './token.mjs';
-import { tearDownNewRelicIntegration } from './newrelic-lib.mjs';
+import { nerdGraphClient, tearDownNewRelicAlerting, tearDownNewRelicIntegration } from './newrelic-lib.mjs';
 
 if (existsSync('.env')) process.loadEnvFile('.env');
 
@@ -37,7 +37,9 @@ if (!token) {
 }
 
 console.log(`This deletes the CGC demo's flags, metrics, AI Config, trigger and experiments from LaunchDarkly
-project "${args.project}"${dryRun ? ' (dry run: nothing is deleted)' : ''}. Other resources and the ld-example-* samples are left alone.`);
+project "${args.project}", plus the LaunchDarkly integration subscriptions (New Relic, Slack), and in New Relic the
+rage-click alert and the automated kill switch workflow${dryRun ? ' (dry run: nothing is deleted)' : ''}. Other resources and the ld-example-* samples are left alone.
+New Relic keeps the change events already recorded; they cannot be deleted.`);
 if (!dryRun && !args.yes) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await rl.question(`Type the project key (${args.project}) to continue: `);
@@ -64,9 +66,18 @@ const hasState = stateList !== '';
 const ownsProject = stateList.split('\n').includes('launchdarkly_project.demo[0]');
 const tfDestroy = () => spawnSync('terraform', ['-chdir=terraform', 'destroy', '-auto-approve', '-input=false', '-var', `project_key=${args.project}`, '-var', `environment_key=${args.env}`, ...(ownsProject ? ['-var', 'create_project=true'] : [])], { env: tfEnv, stdio: 'inherit' });
 
-// LaunchDarkly's New Relic integration is an account-level subscription, not part of the project,
-// so it would outlive a deleted project. Remove it first, either way.
+// LaunchDarkly's New Relic and Slack integrations are account-level subscriptions, not part of the
+// project, so they would outlive a deleted project. Remove them first, either way.
 for (const result of await tearDownNewRelicIntegration(ctx)) report(result);
+for (const result of await tearDownSlackSubscription(ctx)) report(result);
+// The rage-click alert, its policy and the automated kill switch live in New Relic, not in
+// LaunchDarkly, so a deleted project would leave them behind (pointing at a dead trigger URL).
+if (process.env.NR_USER_KEY && process.env.NR_ACCOUNT_ID) {
+  const nerdgraph = nerdGraphClient({ userKey: process.env.NR_USER_KEY, url: process.env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
+  for (const result of await tearDownNewRelicAlerting(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID, dryRun })) report(result);
+} else {
+  console.log('  [=] NR_USER_KEY and NR_ACCOUNT_ID are not both in .env, so the New Relic alert and workflow are left alone.');
+}
 
 if (ownsProject) {
   // Setup created this project (--create-project), so deleting the project removes everything in
