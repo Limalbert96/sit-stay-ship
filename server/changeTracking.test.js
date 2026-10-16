@@ -11,12 +11,16 @@ const env = {
   LD_ENV_KEY: 'test',
 };
 
+const guid = (s) => Buffer.from(s).toString('base64').replace(/=+$/, '');
+const APM_GUID = guid('1234567|APM|APPLICATION|1000000001');
+const BROWSER_GUID = guid('1234567|BROWSER|APPLICATION|1000000002');
+
 const searchResult = {
   ok: true,
   json: async () => ({
     data: { actor: { entitySearch: { results: { entities: [
-      { guid: 'GUID-BROWSER', name: 'Canine Good Citizen', domain: 'BROWSER' },
-      { guid: 'GUID-APM', name: 'Canine Good Citizen', domain: 'APM' },
+      { guid: BROWSER_GUID, name: 'Canine Good Citizen', domain: 'BROWSER' },
+      { guid: APM_GUID, name: 'Canine Good Citizen', domain: 'APM' },
     ] } } } },
   }),
 };
@@ -30,11 +34,10 @@ describe('changeTrackingEnabled', () => {
     expect(changeTrackingEnabled(env)).toBe(false);
   });
 
-  it('when switched on, needs a user key and something to identify the account or the entities', () => {
+  it('when switched on, needs a user key and the account id', () => {
     expect(changeTrackingEnabled({ ...env, ...on })).toBe(true);
     expect(changeTrackingEnabled({ ...on, NR_ACCOUNT_ID: '1' })).toBe(false); // license keys cannot call NerdGraph
     expect(changeTrackingEnabled({ ...on, NR_USER_KEY: 'NRAK-test' })).toBe(false);
-    expect(changeTrackingEnabled({ ...on, NR_USER_KEY: 'NRAK-test', NR_APM_ENTITY_GUID: 'a', NR_BROWSER_ENTITY_GUID: 'b' })).toBe(true);
   });
 });
 
@@ -67,14 +70,14 @@ describe('latestAuditTitle', () => {
 
 describe('flagChangeEvent', () => {
   const event = (extra) => flagChangeEvent({
-    guid: 'GUID-APM', flagKey: 'premium-video-tutorials', project: 'cgc-demo', environment: 'test', ...extra,
+    guid: APM_GUID, flagKey: 'premium-video-tutorials', project: 'cgc-demo', environment: 'test', ...extra,
   });
 
-  it('builds a FEATURE_FLAG change event aimed at one entity', () => {
+  it('builds a FEATURE_FLAG change event aimed at one application by its entity.guid', () => {
     const { query, variables } = event();
     expect(query).toContain('changeTrackingCreateEvent');
     expect(query).toContain('category: "FEATURE_FLAG"');
-    expect(variables.query).toBe("id = 'GUID-APM'");
+    expect(variables.query).toBe(`id = '${APM_GUID}'`);
     expect(variables.flagKey).toBe('premium-video-tutorials');
     expect(variables.description).toContain('cgc-demo');
     expect(query).toContain('project: "cgc-demo"');
@@ -133,7 +136,7 @@ describe('flagChangeEvent', () => {
 });
 
 describe('guidsFromSearch', () => {
-  it('sorts the two entities by domain, and copes with neither being there', () => {
+  it('sorts the two applications by domain, and copes with neither being there', () => {
     expect(guidsFromSearch({ actor: { entitySearch: { results: { entities: [
       { guid: 'b', domain: 'BROWSER' }, { guid: 'a', domain: 'APM' },
     ] } } } })).toEqual({ apm: 'a', browser: 'b' });
@@ -142,24 +145,23 @@ describe('guidsFromSearch', () => {
 });
 
 describe('recordFlagChange', () => {
-  it('looks the entities up once, then marks both of them', async () => {
+  it('looks the applications up once, then marks both of them', async () => {
     const fetchImpl = vi.fn(async (_url, options) => (JSON.parse(options.body).query.startsWith('{ actor') ? searchResult : created));
 
     expect(await recordFlagChange('premium-video-tutorials', { fetchImpl, env })).toEqual({ marked: ['apm', 'browser'], error: undefined });
-    expect(fetchImpl).toHaveBeenCalledTimes(3); // one lookup, then one event per entity
+    expect(fetchImpl).toHaveBeenCalledTimes(3); // one lookup, then one event per application
     expect(fetchImpl.mock.calls[0][1].headers['API-Key']).toBe('NRAK-test');
 
     await recordFlagChange('exam-progress-tracker', { fetchImpl, env });
     expect(fetchImpl).toHaveBeenCalledTimes(5); // the lookup is cached, so only two more calls
   });
 
-  it('skips the lookup when both GUIDs are given', async () => {
-    const fetchImpl = vi.fn(async () => created);
-    const withGuids = { ...env, NR_APM_ENTITY_GUID: 'A', NR_BROWSER_ENTITY_GUID: 'B' };
+  it('aims each event at that application\'s entity.guid', async () => {
+    const fetchImpl = vi.fn(async (_url, options) => (JSON.parse(options.body).query.startsWith('{ actor') ? searchResult : created));
 
-    await recordFlagChange('premium-video-tutorials', { fetchImpl, env: withGuids });
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).variables.query).toBe("id = 'A'");
+    await recordFlagChange('premium-video-tutorials', { fetchImpl, env });
+    const queries = fetchImpl.mock.calls.slice(1).map(([, o]) => JSON.parse(o.body).variables.query);
+    expect(queries).toEqual([`id = '${APM_GUID}'`, `id = '${BROWSER_GUID}'`]);
   });
 
   it('reports the message NerdGraph returns, which arrives with status 200', async () => {
@@ -170,9 +172,9 @@ describe('recordFlagChange', () => {
     await expect(recordFlagChange('premium-video-tutorials', { fetchImpl, env })).rejects.toThrow('Not authorized');
   });
 
-  it('says so when New Relic has no matching entity', async () => {
+  it('says so when New Relic has no matching application', async () => {
     const empty = { ok: true, json: async () => ({ data: { actor: { entitySearch: { results: { entities: [] } } } } }) };
     await expect(recordFlagChange('premium-video-tutorials', { fetchImpl: vi.fn(async () => empty), env }))
-      .rejects.toThrow('no APM or Browser entity found');
+      .rejects.toThrow('no APM or Browser application found');
   });
 });

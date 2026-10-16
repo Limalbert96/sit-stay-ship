@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  EXPERIMENTS, createApi, deleteIfPresent, envFromTerraformOutputs, inspectTerraformState, mergeEnv, readEnvValue, stepAiConfigTargeting, stepExperiment, tearDownExperiments,
+  EXPERIMENTS, createApi, deleteIfPresent, envFromTerraformOutputs, inspectTerraformState, mergeEnv, readEnvValue, stepAiConfigTargeting, stepExperiment, tearDownExperiments, tearDownSlackSubscription,
 } from './setup-lib.mjs';
 
 describe('mergeEnv', () => {
@@ -253,5 +253,23 @@ describe('inspectTerraformState', () => {
     expect(inspectTerraformState(state([{ mode: 'data', type: 'launchdarkly_environment', instances: [{ attributes: { project_key: 'x' } }] }]))).toEqual({ projectKey: '', ownsProject: false });
     expect(inspectTerraformState('')).toEqual({ projectKey: '', ownsProject: false });
     expect(inspectTerraformState('not json')).toEqual({ projectKey: '', ownsProject: false });
+  });
+});
+
+describe('tearDownSlackSubscription', () => {
+  it('removes only the Slack subscription this project made, and reports in a dry run', async () => {
+    const items = [
+      { _id: 'a', name: 'CGC Prep: flag changes in Slack', tags: ['cgc-prep'] },
+      { _id: 'b', name: 'Team alerts', tags: [] },
+    ];
+    const api = vi.fn(async (method) => (method === 'GET' ? { status: 200, data: { items } } : { status: 0, data: {} }));
+    const results = await tearDownSlackSubscription({ api });
+    expect(api.mock.calls.filter(([m]) => m === 'DELETE').map(([, path]) => path)).toEqual(['/integrations/slack/a']);
+    expect(results[0].detail).toBe('would delete the Slack subscription "CGC Prep: flag changes in Slack"');
+  });
+
+  it('does nothing when there is none', async () => {
+    const api = vi.fn(async () => ({ status: 200, data: { items: [] } }));
+    expect(await tearDownSlackSubscription({ api })).toEqual([]);
   });
 });

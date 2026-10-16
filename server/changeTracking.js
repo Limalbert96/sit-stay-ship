@@ -16,7 +16,6 @@
 //                                     browser key: those can only send telemetry.
 //   NR_ACCOUNT_ID                     the same account id the agents already use.
 // Optional:
-//   NR_APM_ENTITY_GUID, NR_BROWSER_ENTITY_GUID   skip the lookup and use these exact entities.
 //   NR_API_URL       for EU accounts: https://api.eu.newrelic.com/graphql
 const DEFAULT_URL = 'https://api.newrelic.com/graphql';
 const LD_API = 'https://app.launchdarkly.com/api/v2';
@@ -31,7 +30,7 @@ const nerdGraphUrl = () => process.env.NR_API_URL ?? DEFAULT_URL;
 // agents' license keys cannot call NerdGraph.
 export function changeTrackingEnabled(env = process.env) {
   return env.NR_BACKEND_CHANGE_TRACKING === 'true'
-    && Boolean(env.NR_USER_KEY && (env.NR_ACCOUNT_ID || (env.NR_APM_ENTITY_GUID && env.NR_BROWSER_ENTITY_GUID)));
+    && Boolean(env.NR_USER_KEY && env.NR_ACCOUNT_ID);
 }
 
 // LaunchDarkly's own "Generic trigger made changes to the flag ..." text is identical for every
@@ -88,7 +87,8 @@ export async function latestAuditTitle({ flagKey, token, fetchImpl = fetch }) {
   }
 }
 
-// Finds the APM and Browser entities by the name the agents report under. Both agents in this
+// Finds the APM and Browser applications by the name the agents report under; the search returns
+// each one's entity.guid, which is what the change event is aimed at. Both agents in this
 // project use the same name, so one search returns both and `domain` tells them apart.
 export function entitySearchQuery({ name, accountId }) {
   const clauses = [`name = '${name.replace(/'/g, "\\'")}'`, "domain IN ('APM', 'BROWSER')"];
@@ -159,7 +159,8 @@ export function flagChangeEvent({ guid, flagKey, state, viaKillSwitch = false, t
       environment,
     }),
     variables: {
-      // The mutation's own search has to resolve to exactly one entity, so it matches on the GUID.
+      // The mutation's own entity search has to resolve to exactly one application, so it matches on
+      // that application's entity.guid, not on its name.
       query: `id = '${guid}'`,
       flagKey,
       user: triggerEventName ? 'LaunchDarkly trigger' : auditTitle ? 'LaunchDarkly' : viaKillSwitch ? 'LaunchDarkly kill switch' : 'LaunchDarkly (sit-stay-ship)',
@@ -185,7 +186,7 @@ async function postNerdGraph(body, { fetchImpl = fetch, apiKey = process.env.NR_
   return data.data;
 }
 
-// Picks the APM and Browser GUIDs out of a search result.
+// Picks the APM and Browser entity.guid out of a search result.
 export function guidsFromSearch(data) {
   const entities = data?.actor?.entitySearch?.results?.entities ?? [];
   const find = (domain) => entities.find((e) => e.domain === domain)?.guid;
@@ -194,28 +195,23 @@ export function guidsFromSearch(data) {
 
 let cached = null;
 
+// Asks NerdGraph for each application's entity.guid, by the name the agents report under. Nothing
+// to copy into .env: the GUID comes straight from the search.
 export async function resolveEntityGuids({ fetchImpl = fetch, env = process.env } = {}) {
   if (cached) return cached;
-  const fromEnv = { apm: env.NR_APM_ENTITY_GUID, browser: env.NR_BROWSER_ENTITY_GUID };
-  if (fromEnv.apm && fromEnv.browser) {
-    cached = fromEnv;
-    return cached;
-  }
-  const name = env.NR_APM_APP_NAME ?? 'Canine Good Citizen';
   const data = await postNerdGraph(
-    { query: entitySearchQuery({ name, accountId: env.NR_ACCOUNT_ID }) },
+    { query: entitySearchQuery({ name: env.NR_APM_APP_NAME ?? 'Canine Good Citizen', accountId: env.NR_ACCOUNT_ID }) },
     { fetchImpl, apiKey: env.NR_USER_KEY, timeoutMs: LOOKUP_TIMEOUT_MS },
   );
-  const found = guidsFromSearch(data);
-  cached = { apm: fromEnv.apm ?? found.apm, browser: fromEnv.browser ?? found.browser };
+  cached = guidsFromSearch(data);
   return cached;
 }
 
-// Posts one change event per entity. Returns which entities got a marker, so the caller can log it.
+// Posts one change event per application. Returns which ones got a marker, so the caller can log it.
 export async function recordFlagChange(flagKey, { state, viaKillSwitch = false, triggerEventName, auditTitle, fetchImpl = fetch, env = process.env } = {}) {
   const guids = await resolveEntityGuids({ fetchImpl, env });
   const targets = Object.entries(guids).filter(([, guid]) => guid);
-  if (!targets.length) throw new Error('no APM or Browser entity found in New Relic for this app name');
+  if (!targets.length) throw new Error('no APM or Browser application found in New Relic for this app name');
 
   const results = await Promise.allSettled(
     targets.map(([, guid]) =>
@@ -240,5 +236,5 @@ export async function recordFlagChange(flagKey, { state, viaKillSwitch = false, 
   return { marked, error: failed?.reason };
 }
 
-// Test hook: the GUID lookup is cached for the life of the process.
+// Test hook: the entity lookup is cached for the life of the process.
 export const resetEntityCache = () => { cached = null; };

@@ -36,7 +36,7 @@ const { values: args } = parseArgs({
     'skip-models': { type: 'boolean', default: false },
     'install-ollama': { type: 'boolean', default: false },
     'no-experiments': { type: 'boolean', default: false },
-    'slack-webhook-url': { type: 'string', default: '' },
+    'slack-webhook-url': { type: 'string', default: process.env.SLACK_WEBHOOK_URL || '' }, // from .env unless given
     'create-project': { type: 'boolean', default: false },
   },
 });
@@ -125,7 +125,8 @@ console.log('\n4. Local chatbot models (Ollama)');
 manual.push(...(await setupOllama({ install: args['install-ollama'], skipModels: args['skip-models'] })).manual);
 
 console.log('\nStill to do by hand:');
-console.log('  - Slack (optional): npm run setup -- --slack-webhook-url <url>, or Organization settings, Integrations, Slack.');
+if (args['slack-webhook-url']) console.log('  - Slack: flag changes post to your webhook. Change one flag to see the message.');
+else console.log('  - Slack (optional): put SLACK_WEBHOOK_URL in .env and run npm run setup again (README, Integrations, Slack).');
 if (manual.length) {
   console.log('\nThese steps did not complete on their own, so do them by hand:');
   for (const m of manual) console.log(`  - ${m}`);

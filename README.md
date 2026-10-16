@@ -21,7 +21,7 @@ More screenshots are further down, next to the section each one belongs to.
 npm install && npm run setup && npm run dev
 ```
 
-That's the short version. `npm run setup` walks you through everything it needs (a free LaunchDarkly account and API token); the [checklist right below](#quick-checklist-what-to-run-and-what-to-do-by-hand) has the full detail, including what to do by hand.
+That's the short version. `npm run setup` walks you through everything it needs (a free LaunchDarkly account and API token); the [checklist right below](#get-started) has the full detail, including what to do by hand.
 
 | Feature area | What this repo demonstrates | Where to read more |
 |---|---|---|
@@ -33,11 +33,11 @@ That's the short version. `npm run setup` walks you through everything it needs 
 
 Stack: React 19 and Vite, `launchdarkly-react-client-sdk` (browser), `@launchdarkly/node-server-sdk` and `@launchdarkly/server-sdk-ai` (backend), **Terraform** for the LaunchDarkly configuration, Ollama for local models, `@newrelic/browser-agent` and `newrelic` (optional).
 
-**Contents:** [Quick checklist](#quick-checklist-what-to-run-and-what-to-do-by-hand) · [Feature map](#feature-map-what-is-built-and-where-to-see-it) · [Demo storyline](#demo-storyline-a-15-minute-walkthrough) · [How it fits together](#how-it-fits-together) · [Quick start](#quick-start-about-10-minutes) · [Manual setup](#manual-setup-instead-of-the-script) · [Tour of the app](#tour-of-the-app) · [Release and remediate](#release-and-remediate) · [Targeting](#targeting) · [Experimentation](#experimentation) · [AI Configs](#ai-configs) · [Integrations](#integrations) · [Tests](#tests) · [Troubleshooting](#troubleshooting) · [Assumptions and security](#assumptions-and-security-notes) · [Project layout](#project-layout)
+**Contents:** [Quick checklist](#get-started) · [Feature map](#feature-map-what-is-built-and-where-to-see-it) · [Demo storyline](#demo-storyline-a-15-minute-walkthrough) · [How it fits together](#how-it-fits-together) · [Quick start](#quick-start-about-10-minutes) · [Manual setup](#manual-setup-instead-of-the-script) · [Tour of the app](#tour-of-the-app) · [Release and remediate](#release-and-remediate) · [Targeting](#targeting) · [Experimentation](#experimentation) · [AI Configs](#ai-configs) · [Integrations](#integrations) · [Tests](#tests) · [Troubleshooting](#troubleshooting) · [Assumptions and security](#assumptions-and-security-notes) · [Project layout](#project-layout)
 
 ---
 
-## Quick checklist: what to run and what to do by hand
+## Get started
 
 **Install once** (about 5 minutes)
 
@@ -48,31 +48,39 @@ Stack: React 19 and Vite, `launchdarkly-react-client-sdk` (browser), `@launchdar
 | LaunchDarkly trial account | <https://launchdarkly.com/start-trial/> (includes experimentation, AI Configs, flag triggers) | Yes |
 | Ollama (free local models, about 3.3 GB) | `npm run ollama` installs it (macOS, Homebrew) and downloads the models; needs no account or token. Other systems: <https://ollama.com/download> | Optional (canned replies without it) |
 
-**Run** (the commands, in order)
+**Get started** (the commands, in order)
 
 ```bash
+git clone https://github.com/Limalbert96/sit-stay-ship.git && cd sit-stay-ship
 npm install
-npm run ollama                         # optional, no account or token needed: installs Ollama, downloads the models
-npm run setup                          # asks for your LaunchDarkly API token the first time (step 1 below)
-npm run dev                            # http://localhost:5173
-# setup ends by telling you to generate the experiment data (it started both experiments):
-npm run simulate -- --target flag --users 5000
-npm run simulate -- --target ai --users 2000
+cp .env.example .env                   # then fill in the lines marked YOU (below)
+npm run setup                          # first time in a new project: npm run setup -- --project <key> --create-project
+npm run dev                            # terminal 1: http://localhost:5173
+npm run incident                       # terminal 2, needs Chrome: plays a bad release, about 8 minutes
 ```
 
-(`npm run setup -- --install-ollama` does the Ollama part inside setup, if you prefer one command.)
+`npm run incident -- --dry-run` previews the plan first; `--calm 30 --detect 60` is a quick rehearsal; `--auto-remediation` lets New Relic's alert fire the kill switch instead of a person. For the experiment data, `npm run setup` ends by printing the two `npm run simulate` commands.
 
-**Do by hand** (the only manual steps)
+**Start over from scratch**
 
-1. **Create a LaunchDarkly API access token** (2 minutes, before the first `npm run setup`): LaunchDarkly, Account settings, Authorization, Access tokens, Create token, role **Writer**. Paste it when `npm run setup` asks.
-2. **Watch the demo happen in two windows:** the app, and the LaunchDarkly dashboard (toggle the flag, add and remove targets, read experiment results). That is the demo itself; the [demo storyline](#demo-storyline-a-15-minute-walkthrough) says what to click.
-3. **Read the experiment results** on the Results tab a few minutes after `npm run simulate` (LaunchDarkly analyses in 5-minute steps).
-4. **Optional, Slack:** add the Slack integration in LaunchDarkly (about 2 minutes, [steps](#slack-flag-change-notifications)) to see every flag change posted to a channel.
-5. **Optional, New Relic:** create the account and apps yourself and add the keys to `.env` ([steps](#new-relic-optional-browser-and-apm-agents)). Nothing else depends on it.
-   Then run `npm run incident` to generate the charts. Two ways to end the incident:
-   - **Manual (default, for live demos):** press **Fire kill switch** on the page yourself, or just let the script do it (`npm run incident` alone). Make sure auto-remediation is off first: `npm run newrelic -- --auto-remediation off`.
-   - **Auto-healing:** New Relic's rage-click alert pulls the kill switch itself, no one touches anything. Turn it on with `npm run newrelic -- --auto-remediation on`, then run `npm run incident -- --auto-remediation` (this flag also works standalone: it turns automation on for that one run and restores the previous setting after, so it never breaks a later manual demo).
-6. **Clean up:** `npm run teardown -- --project <key>` removes everything setup made in a scratch project (see [Try it from scratch](#try-it-from-scratch-like-a-new-user-scratch-project)).
+```bash
+npm run teardown -- --dry-run          # preview: nothing is deleted
+npm run teardown                       # type the project key to confirm
+npm run setup -- --project <key> --create-project
+```
+
+Teardown removes what setup made: the LaunchDarkly flags, metrics, AI Config, trigger and experiments, the integration subscriptions (New Relic, Slack), and in New Relic the rage-click alert and the kill switch workflow. Change events already recorded in New Relic stay. Details: [Try it from scratch](#try-it-from-scratch-like-a-new-user-scratch-project).
+
+**What goes in `.env`** (only the lines marked YOU; `npm run setup` writes the rest)
+
+| You provide | Where to get it | Needed for |
+|---|---|---|
+| `LD_API_TOKEN` | LaunchDarkly: Account settings, Authorization, Access tokens, role **Writer** (**Admin** or **Owner** for `--create-project`). Leave it empty and setup asks for it | Setup, teardown |
+| `NR_ACCOUNT_ID`, `NR_BROWSER_APP_ID`, `NR_BROWSER_LICENSE_KEY`, `NR_APM_LICENSE_KEY` | New Relic: Add data, Browser monitoring and Node.js ([steps](#new-relic-optional-browser-and-apm-agents)) | The two agents |
+| `NR_USER_KEY` | New Relic: profile menu, API keys, Create key, type **User** | Setup wiring LaunchDarkly and New Relic both ways |
+| `SLACK_WEBHOOK_URL` | Slack: an incoming webhook ([steps](#slack-flag-change-notifications)) | Flag changes posted to Slack |
+
+Every line in `.env.example` is live, and an empty value turns that feature off, so you can skip New Relic and Slack and the rest still runs.
 
 If a setup step reports `[!]`, it says what to finish by hand, and [Manual setup](#manual-setup-instead-of-the-script) covers each one.
 
@@ -87,7 +95,7 @@ If a setup step reports `[!]`, it says what to finish by hand, and [Manual setup
 | Requirement | How it is met |
 |---|---|
 | Use one of the top 5 LaunchDarkly SDKs | **JavaScript**: `launchdarkly-react-client-sdk` (browser) for Parts 1 and 2 and experimentation, `@launchdarkly/node-server-sdk` and `@launchdarkly/server-sdk-ai` (Node) for the AI Config. |
-| Detailed set-up and run instructions, including assumptions about the environment | This README: the [checklist](#quick-checklist-what-to-run-and-what-to-do-by-hand), [Quick start](#quick-start-about-10-minutes), [Manual setup](#manual-setup-instead-of-the-script), [Troubleshooting](#troubleshooting) and [Assumptions and security notes](#assumptions-and-security-notes). |
+| Detailed set-up and run instructions, including assumptions about the environment | This README: the [Get started](#get-started), [Quick start](#quick-start-about-10-minutes), [Manual setup](#manual-setup-instead-of-the-script), [Troubleshooting](#troubleshooting) and [Assumptions and security notes](#assumptions-and-security-notes). |
 | Code comments where the SDK key is replaced or a flag is re-created | SDK keys: `.env.example` (every key, where to find it), `src/main.jsx` (client-side ID), `server/index.js` and `server/env.js` (SDK key). Flags: `terraform/main.tf` (each flag, with why it exists; `terraform apply` re-creates them) and `src/components/CGCPrepLanding.jsx` (the flag keys the code reads). |
 | A sample app a customer could run | A working landing page with a [tour](#tour-of-the-app), a one-command setup, teardown, tests and a [demo storyline](#demo-storyline-a-15-minute-walkthrough). Demo tooling (user switch, bad-release switch) lives in a clearly separate bar at the top. |
 
@@ -207,13 +215,13 @@ npm run setup                         # add --install-ollama to install Ollama t
 
 Everything it creates is left **on** and ready: both flags are enabled, the chatbot works, and both experiments are running. The flag keeps a dark default, and its experiment runs on its own "trial users" rule (Jo and Riley), so the targeting demo stays predictable.
 
-Options: `--project <key>` and `--env <key>` (defaults `default` and `test`), `--create-project` (make a new project with that key), `--dry-run`, `--install-ollama`, `--skip-models`, `--no-experiments`, `--slack-webhook-url <url>` (also posts every flag change to Slack).
+Options: `--project <key>` and `--env <key>` (defaults `default` and `test`), `--create-project` (make a new project with that key), `--dry-run`, `--install-ollama`, `--skip-models`, `--no-experiments`, `--slack-webhook-url <url>` (also posts every flag change to Slack; or set `SLACK_WEBHOOK_URL` in `.env`).
 
 The **project key** is the short ID of your LaunchDarkly project (`default` in a new account), visible in LaunchDarkly URLs such as `.../projects/default/...` and under Project settings. It is not the SDK key.
 
 The script prints a summary. Anything marked `[!]` did not complete (for example a plan without flag triggers) and says what to finish by hand; the [manual setup](#manual-setup-instead-of-the-script) covers each part. What it deliberately does not do:
 
-- **Slack** needs your own workspace: pass `--slack-webhook-url`, or see [Integrations](#integrations).
+- **Slack** needs a webhook from your own workspace: put it in `.env` as `SLACK_WEBHOOK_URL` and setup does the rest ([Integrations](#integrations)).
 - **Experiment data.** Setup ends by printing the two `npm run simulate` commands: run them, then read the Results tabs a few minutes later.
 
 The end of a successful setup looks like this:
@@ -272,7 +280,7 @@ It stops and archives the experiments, runs `terraform destroy` (if Terraform cr
 | `npm run ollama` | Installs Ollama and downloads the two local models; no LaunchDarkly token needed |
 | `npm run setup` | One-shot LaunchDarkly setup (above) |
 | `npm run experiments` | Creates and starts the two experiments (setup does this; use it to retry) |
-| `npm run teardown` | Removes what setup created (above) |
+| `npm run teardown` | Removes what setup created (above), including the New Relic side: the integration subscriptions, the rage-click alert and policy, and the kill switch workflow, channel and destination (needs `NR_USER_KEY`). Change events already in New Relic stay |
 | `npm run simulate -- --target flag\|ai --users N` | Generates synthetic experiment traffic ([details](#the-traffic-simulator)) |
 | `npm run incident` | Plays out a whole bad-release incident for the New Relic charts ([details](#new-relic-optional-browser-and-apm-agents)); `--auto-remediation` lets New Relic fire the kill switch |
 | `npm run newrelic` | Wires LaunchDarkly and New Relic both ways; `--auto-remediation on\|off`, `--status` ([details](#automated-remediation-let-new-relic-pull-the-kill-switch-itself)) |
@@ -295,10 +303,13 @@ Copy `.env.example` to `.env`. It is git-ignored; never commit it.
 | `LD_CLIENT_ID` | LaunchDarkly: Project settings, Environments, your environment, **Client-side ID** | Browser SDK |
 | `LD_SDK_KEY` | Same page, **SDK key** (secret) | Chat backend, traffic simulator (server SDK) |
 | `LD_PROJECT_KEY`, `LD_ENV_KEY` | Written by `npm run setup` (which project and environment you set up) | `npm run experiments`, `npm run teardown` (their default `--project` and `--env`) |
-| `LD_TRIGGER_URL` | The flag trigger URL (below). Secret | Chat backend (the kill switch button) |
-| `OPENAI_API_KEY`, `OLLAMA_URL` | Optional: OpenAI key (for `gpt-...` models); Ollama address if not the default | Chat backend |
+| `LD_TRIGGER_URL` | Written by `npm run setup` (the flag trigger URL, below). Secret | Chat backend (the kill switch button), `npm run incident` |
 | `NR_ACCOUNT_ID`, `NR_BROWSER_APP_ID`, `NR_BROWSER_LICENSE_KEY` | New Relic: Add data, Browser monitoring, copy/paste snippet | Browser agent (optional) |
-| `NR_APM_LICENSE_KEY`, `NR_APM_APP_NAME`, `NR_APM_AIM_ENABLED` | New Relic: Add data, Node.js | Backend APM agent (optional) |
+| `NR_APM_LICENSE_KEY`, `NR_APM_APP_NAME`, `NR_APM_AIM_ENABLED` | New Relic: Add data, Node.js. `NR_APM_APP_NAME` must be the name both apps report under | Backend APM agent (optional) |
+| `NR_USER_KEY` | New Relic: profile menu, API keys, Create key, type **User** | `npm run setup`, `npm run newrelic`, `npm run teardown`, `npm run incident` (optional) |
+| `SLACK_WEBHOOK_URL` | Slack: an incoming webhook (see Integrations, Slack) | `npm run setup` and `npm run teardown` (optional) |
+| `OPENAI_API_KEY`, `OLLAMA_URL` | Optional: OpenAI key (for `gpt-...` models); Ollama address if not the default | Chat backend |
+| `NR_API_URL`, `NR_BACKEND_CHANGE_TRACKING` | Rarely needed, commented out in `.env.example`: EU accounts' NerdGraph address; the fallback that posts flag-change markers from the chat backend | New Relic scripts, chat backend |
 
 **Why both a client-side ID and an SDK key?** They belong to two different SDKs. The React app uses the *client-side* SDK, which only needs the public client-side ID. The Node backend and the simulator use the *server-side* SDK (which the AI Configs SDK requires), and that needs the secret SDK key. Only the client-side ID and the New Relic browser values ever reach the browser: `vite.config.js` copies just those whitelisted values into the bundle, and refuses to build if `LD_CLIENT_ID` looks like an `sdk-...` key. Use the client-side ID and SDK key of the **same** environment.
 
@@ -693,11 +704,16 @@ If the AI Config is switched off, the chatbot shows "Assistant is switched off".
 
 ### Slack: flag change notifications
 
-1. LaunchDarkly: Organization settings (gear icon), Integrations, **Slack**, Add integration.
-2. Authorize your Slack workspace and pick a channel. Choose which environments and flags to watch (all is fine for the demo).
-3. **Test it:** change any flag in LaunchDarkly (for example toggle `exam-progress-tracker`). A message appears in the channel within seconds, showing who changed what. Firing the flag trigger posts there too, which makes the remediation demo easy to follow.
+Setup can create this for you. The one thing it cannot do is make the Slack side: Slack only hands out an incoming-webhook URL from an app in a workspace you control, so you create that once (about 2 minutes) and give setup the URL.
 
-It needs a Slack workspace you control, so it cannot ship inside this repo.
+1. Slack: <https://api.slack.com/apps>, **Create New App**, From scratch, pick your workspace.
+2. **Incoming Webhooks**, switch it on, **Add New Webhook to Workspace**, choose the channel, and copy the URL (`https://hooks.slack.com/services/...`).
+3. Put it in `.env` as `SLACK_WEBHOOK_URL=...` (or pass `--slack-webhook-url <url>` once), then run `npm run setup`. Terraform creates a LaunchDarkly Slack subscription named `CGC Prep: flag changes in Slack` for every environment of the project.
+4. **Test it:** change any flag in LaunchDarkly (for example toggle `exam-progress-tracker`). A message appears in the channel within seconds, showing who changed what. Firing the flag trigger posts there too, which makes the remediation demo easy to follow.
+
+`npm run teardown` deletes that subscription again (it is an account-level setting, so it would otherwise outlive a deleted project). It does not touch your Slack app or the webhook URL.
+
+By hand instead: LaunchDarkly, Organization settings (gear icon), Integrations, **Slack**, Add integration, authorize your workspace and pick a channel.
 
 What a flag change looks like in the Slack channel (names hidden), including the trigger firing:
 
@@ -724,7 +740,7 @@ The APM agent reports the Node backend:
 
 3. **Change tracking: every flag change as a marker on New Relic's charts** (needs `NR_USER_KEY`). LaunchDarkly's New Relic integration (`new-relic-apm-v2`) writes each flag change to New Relic as a **change tracking event of category `FEATURE_FLAG`**, so a "flag turned off" marker lines up with the error spike. `npm run setup` (or `npm run newrelic` on its own) creates it when `NR_USER_KEY` is in `.env`: a New Relic **user key** (profile menu, API keys, Create key, type **User**; the license and browser keys above cannot call NerdGraph).
 
-   One subscription marks one New Relic application, so there are two, named after the entity: **`Canine Good Citizen [APM]`** and **`Canine Good Citizen [Browser]`**. The application ids are looked up from `NR_APM_APP_NAME`. Two details the setup handles for you:
+   One subscription marks one New Relic application, so there are two, named after the entity: **`Canine Good Citizen [APM]`** and **`Canine Good Citizen [Browser]`**. Setup asks NerdGraph for each application's **entity.guid** by `NR_APM_APP_NAME` (so the APM and Browser apps must share that name), and gives it to the integration as `entityGuid`. Nothing to copy into `.env`. Two details the setup handles for you:
    - **All environments, one project.** The integration's default policy covers only the `production` environment, and this demo runs in `test`, so each subscription's policy is `proj/<project>:env/*:flag/*`.
    - **Created through the API, not Terraform.** The Terraform provider (3.1.x) only accepts the integration keys compiled into it, and `new-relic-apm-v2` is newer than that list. The step finds its subscriptions by name and updates them, so running it again is safe.
 
@@ -734,7 +750,7 @@ The APM agent reports the Node backend:
    SELECT shortDescription, user, launchdarklyAuditLogUrl FROM ChangeTrackingEvent WHERE launchdarklyProjectKey = 'cgc-demo' SINCE 1 day ago
    ```
 
-   > **Known gap (reported to LaunchDarkly):** in testing, the `[Browser]` subscription reports success but no event reaches the Browser entity; only `[APM]` events arrive. The Browser app **calls** the APM service, which New Relic records as a relationship, so Browser charts still show the APM markers: switch on **Related Changes** on the chart.
+   Both subscriptions work: each flag change lands on the APM and the Browser entity, so the marker shows on either app's charts. (This relies on the integration taking the entity's `entity.guid`, which setup looks up for you.)
 
    **Which kill switch fired?** Both kill switches are flag triggers, and a trigger fire reads the same in New Relic: `Generic trigger made changes to the flag …`. LaunchDarkly's flag history tells them apart, because each caller sends an `eventName` that the trigger records: **`Manual kill switch: pressed on the CGC Prep page was triggered`** (the page's button, from [`server/index.js`](server/index.js)) or **`New Relic auto-remediation: the rage-click alert opened an issue was triggered`** (New Relic's workflow). From any marker in New Relic, follow `launchdarklyAuditLogUrl` to see which.
 

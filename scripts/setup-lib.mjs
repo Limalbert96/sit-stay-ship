@@ -99,6 +99,33 @@ export function createApi({ token, fetchImpl = fetch, dryRun = false }) {
 export const ok = (status) => status >= 200 && status < 300;
 export const failed = (what, res) => ({ status: 'manual', detail: `${what} (LaunchDarkly answered ${res.status}: ${res.data?.message ?? 'no message'})` });
 
+// ---- Account-level integration subscriptions ------------------------------------------------
+// LaunchDarkly integrations (New Relic, Slack) are subscriptions on the account, not part of a
+// project, so deleting a project leaves them behind. Ours carry the cgc-prep tag, whatever they are
+// named; `legacyName` also catches one made under an older name. A dry run (status 0) only reports.
+export async function tearDownSubscriptions({ api }, { integration, label, legacyName }) {
+  const list = await api('GET', `/integrations/${integration}`);
+  const ours = (list.data?.items ?? []).filter((s) => s.tags?.includes('cgc-prep') || (legacyName && s.name?.startsWith(legacyName)));
+  const results = [];
+  for (const s of ours) {
+    const res = await api('DELETE', `/integrations/${integration}/${s._id}`);
+    if (res.status === 0) {
+      results.push({ status: 'exists', detail: `would delete the ${label} subscription "${s.name}"` });
+      continue;
+    }
+    results.push(res.status >= 200 && res.status < 300 || res.status === 404
+      ? { status: 'created', detail: `deleted the ${label} subscription "${s.name}"` }
+      : { status: 'manual', detail: `could not delete "${s.name}" (LaunchDarkly answered ${res.status})` });
+  }
+  return results;
+}
+
+// The Slack subscription Terraform makes when SLACK_WEBHOOK_URL is set. Terraform forgets it when a
+// scratch project is deleted whole (its children are dropped from state first), so it is removed
+// here through the API instead.
+export const tearDownSlackSubscription = (ctx) =>
+  tearDownSubscriptions(ctx, { integration: 'slack', label: 'Slack', legacyName: 'CGC Prep: flag changes in Slack' });
+
 // ---- AI Config default rule and experiments ------------------------------------------------
 // Each step returns { status: 'created' | 'exists' | 'manual', detail } and never throws, so
 // one failing step does not stop the rest.
