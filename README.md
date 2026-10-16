@@ -54,7 +54,7 @@ Stack: React 19 and Vite, `launchdarkly-react-client-sdk` (browser), `@launchdar
 git clone https://github.com/Limalbert96/sit-stay-ship.git && cd sit-stay-ship
 npm install
 cp .env.example .env                   # then fill in the lines marked YOU (below)
-npm run setup                          # first time in a new project: npm run setup -- --project <key> --create-project
+npm run setup -- --project cgc-demo --create-project   # creates the cgc-demo project (needs an Admin or Owner token)
 npm run dev                            # terminal 1: http://localhost:5173
 npm run incident                       # terminal 2, needs Chrome: plays a bad release, about 8 minutes
 ```
@@ -65,11 +65,11 @@ npm run incident                       # terminal 2, needs Chrome: plays a bad r
 
 ```bash
 npm run teardown -- --dry-run          # preview: nothing is deleted
-npm run teardown                       # type the project key to confirm
-npm run setup -- --project <key> --create-project
+npm run teardown                       # type the project key (cgc-demo) to confirm
+npm run setup -- --project cgc-demo --create-project
 ```
 
-Teardown removes what setup made: the LaunchDarkly flags, metrics, AI Config, trigger and experiments, the integration subscriptions (New Relic, Slack), and in New Relic the rage-click alert and the kill switch workflow. Change events already recorded in New Relic stay. Details: [Try it from scratch](#try-it-from-scratch-like-a-new-user-scratch-project).
+Teardown removes what setup made: the LaunchDarkly flags, metrics, AI Config, trigger and experiments, the integration subscriptions (New Relic, Slack), and in New Relic the rage-click alert and the kill switch workflow. Change events already recorded in New Relic stay. To use a project you already have instead, run `npm run setup -- --project <its key>` (a Writer token is enough). Details: [Try it from scratch](#try-it-from-scratch-like-a-new-user-scratch-project).
 
 **What goes in `.env`** (only the lines marked YOU; `npm run setup` writes the rest)
 
@@ -249,9 +249,9 @@ By default the backend keeps the models in memory for 30 minutes after the last 
 The quickest way to see exactly what anyone who clones this repo sees is to run setup into a brand-new, empty project:
 
 ```bash
-npm run setup -- --project cgc-test --create-project     # Terraform creates the project, then everything in it
+npm run setup -- --project cgc-demo --create-project     # Terraform creates the project, then everything in it
 npm run dev
-npm run teardown -- --project cgc-test                   # deletes the whole scratch project when you are done
+npm run teardown -- --project cgc-demo                   # deletes the whole scratch project when you are done
 ```
 
 Teardown asks you to type the project key before it deletes anything (a safety check against wiping the wrong project). Add `--yes` to skip the question, or `--dry-run` to only list what it would remove.
@@ -841,7 +841,7 @@ The `exam-progress-tracker` flag controls the **Exam Progress Tracker** card and
 
 ## Demo storyline (a 15-minute walkthrough)
 
-One company, four hats. Keep the app and the LaunchDarkly project (`cgc-test`, environment `test`) side by side, plus Slack if you set it up. The **demo bar** at the top of the app shows who you are viewing as and what each flag serves, with the reason.
+One company, four hats. Keep the app and the LaunchDarkly project (`cgc-demo`, environment `test`) side by side, plus Slack if you set it up. The **demo bar** at the top of the app shows who you are viewing as and what each flag serves, with the reason.
 
 **Before you start:** `npm run setup` has already created and started both experiments, and (as it told you) you can run the two `npm run simulate` commands now so the results are ready by Act 3. Then `npm run dev`, wait for `Local models ready`, and open <http://localhost:5173>.
 
@@ -922,7 +922,7 @@ npm test
 | Flag experiment shows few or 0 users | Expected until you run `npm run simulate -- --target flag --users 5000`: in the app only Jo and Riley are in the experiment. The experiment must be running first (setup starts it), the simulator must use the same environment's `LD_SDK_KEY`, and LaunchDarkly analyses every 5 minutes, so wait a few minutes. |
 | Jo or Riley does not see the videos | Trial users are in the 50/50 experiment, and each one is fixed to a side by a hash of their key, so about half of trial users never see the videos. The strip says "in an experiment". That is the experiment working. If Jo and Riley both land on the same side, that is a 1-in-2 chance and not a fault. |
 | Some personas get the 3B model and others the 1B | The AI Config's 50/50 split is by a hash of the user key, so it is random but sticky; it is not tied to tier. |
-| `terraform apply` fails with "already exists" | Something with the same key was created earlier in that project. Try `npm run teardown`, or (more reliable once experiments have run, see above) set up in a scratch project: `npm run setup -- --project cgc-test --create-project`. |
+| `terraform apply` fails with "already exists" | Something with the same key was created earlier in that project. Try `npm run teardown`, or (more reliable once experiments have run, see above) set up in a scratch project: `npm run setup -- --project cgc-demo --create-project`. |
 | `npm run teardown` fails with 409 "still in use in the following experiments" | Only in an existing project, where experiments cannot be deleted through the API. In a scratch project (`--create-project`) teardown deletes the whole project and avoids this. |
 | `terraform` not found | Install Terraform (see [Prerequisites](#1-prerequisites)). |
 | `--create-project` fails with a permissions error | Creating a project needs a token with Admin or Owner permissions. Use an existing project (the default) with a Writer token, or create the token with a higher role. |
