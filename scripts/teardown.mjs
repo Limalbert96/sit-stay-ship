@@ -5,6 +5,7 @@
 //   npm run teardown                (asks you to type the project key first)
 //   npm run teardown -- --dry-run   (lists what it would do; changes nothing)
 //   npm run teardown -- --yes       (no question)
+//   npm run teardown -- --keep-newrelic   (never touch the New Relic integration, alert or workflow)
 //
 // Order matters: experiments are stopped and archived first (they block deleting the flags they
 // use and the API cannot delete them), then `terraform destroy`, then anything left over is
@@ -23,13 +24,15 @@ if (existsSync('.env')) process.loadEnvFile('.env');
 
 const { values: args } = parseArgs({
   options: {
-    project: { type: 'string', default: process.env.LD_PROJECT_KEY || 'default' },
+    project: { type: 'string', default: process.env.LD_PROJECT_KEY || 'cgc-demo' },
     env: { type: 'string', default: process.env.LD_ENV_KEY || 'test' },
     'dry-run': { type: 'boolean', default: false },
     yes: { type: 'boolean', default: false },
+    'keep-newrelic': { type: 'boolean', default: false },
   },
 });
 const dryRun = args['dry-run'];
+const keepNewRelic = args['keep-newrelic'];
 const token = await getApiToken();
 if (!token) {
   console.error(TOKEN_HELP);
@@ -67,16 +70,29 @@ const ownsProject = stateList.split('\n').includes('launchdarkly_project.demo[0]
 const tfDestroy = () => spawnSync('terraform', ['-chdir=terraform', 'destroy', '-auto-approve', '-input=false', '-var', `project_key=${args.project}`, '-var', `environment_key=${args.env}`, ...(ownsProject ? ['-var', 'create_project=true'] : [])], { env: tfEnv, stdio: 'inherit' });
 
 // LaunchDarkly's New Relic and Slack integrations are account-level subscriptions, not part of the
-// project, so they would outlive a deleted project. Remove them first, either way.
-for (const result of await tearDownNewRelicIntegration(ctx)) report(result);
-for (const result of await tearDownSlackSubscription(ctx)) report(result);
-// The rage-click alert, its policy and the automated kill switch live in New Relic, not in
-// LaunchDarkly, so a deleted project would leave them behind (pointing at a dead trigger URL).
-if (process.env.NR_USER_KEY && process.env.NR_ACCOUNT_ID) {
-  const nerdgraph = nerdGraphClient({ userKey: process.env.NR_USER_KEY, url: process.env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
-  for (const result of await tearDownNewRelicAlerting(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID, dryRun })) report(result);
-} else {
-  console.log('  [=] NR_USER_KEY and NR_ACCOUNT_ID are not both in .env, so the New Relic alert and workflow are left alone.');
+// project, so they would outlive a deleted project. The rage-click alert, its policy and the
+// automated kill switch live in New Relic, not in LaunchDarkly, so a deleted project would leave
+// them behind (pointing at a dead trigger URL). Both are removed LAST, and only when everything
+// else succeeded: a teardown that stops halfway must not also have taken the integration down.
+// `--keep-newrelic` leaves the New Relic pieces alone even when everything succeeds.
+async function removeAccountLevelIntegrations() {
+  console.log('\nIntegrations and New Relic alerting');
+  if (problems.length) {
+    console.log('  [!] Left in place because teardown did not finish: the LaunchDarkly integrations (New Relic, Slack) and the New Relic alert and workflow. Fix the problems above and run teardown again.');
+    return;
+  }
+  if (keepNewRelic) {
+    console.log('  [=] --keep-newrelic: the LaunchDarkly New Relic integration and the New Relic alert and workflow are left alone.');
+  } else {
+    for (const result of await tearDownNewRelicIntegration(ctx)) report(result);
+    if (process.env.NR_USER_KEY && process.env.NR_ACCOUNT_ID) {
+      const nerdgraph = nerdGraphClient({ userKey: process.env.NR_USER_KEY, url: process.env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
+      for (const result of await tearDownNewRelicAlerting(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID, dryRun })) report(result);
+    } else {
+      console.log('  [=] NR_USER_KEY and NR_ACCOUNT_ID are not both in .env, so the New Relic alert and workflow are left alone.');
+    }
+  }
+  for (const result of await tearDownSlackSubscription(ctx)) report(result);
 }
 
 if (ownsProject) {
@@ -92,6 +108,7 @@ if (ownsProject) {
     if (children.length) tf(['state', 'rm', ...children]);
     if (tfDestroy().status !== 0) problems.push('Deleting the project did not finish; read the error above. Deleting a project needs a token with Admin or Owner permissions.');
   }
+  await removeAccountLevelIntegrations();
   if (problems.length) { console.log('\nSome things could not be removed:'); problems.forEach((p) => console.log(`  - ${p}`)); process.exit(1); }
   console.log('\nClean.');
   process.exit(0);
@@ -118,6 +135,8 @@ if (existsSync('.env') && !dryRun) {
   const cleared = mergeEnv(readFileSync('.env', 'utf8'), { LD_TRIGGER_URL: '' }, { overwrite: true });
   if (readFileSync('.env', 'utf8').includes('LD_TRIGGER_URL=')) writeFileSync('.env', cleared.text);
 }
+
+await removeAccountLevelIntegrations();
 
 if (problems.length) {
   console.log('\nSome things could not be removed:');

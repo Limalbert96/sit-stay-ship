@@ -20,7 +20,7 @@ if (existsSync('.env')) process.loadEnvFile('.env');
 
 const { values: args } = parseArgs({
   options: {
-    project: { type: 'string', default: process.env.LD_PROJECT_KEY || 'default' },
+    project: { type: 'string', default: process.env.LD_PROJECT_KEY || 'cgc-demo' },
     env: { type: 'string', default: process.env.LD_ENV_KEY || 'test' },
     'dry-run': { type: 'boolean', default: false },
   },

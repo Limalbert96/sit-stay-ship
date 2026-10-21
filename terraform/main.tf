@@ -7,7 +7,7 @@
 #     the LaunchDarkly API right after `terraform apply` (see scripts/setup.mjs).
 
 # ---------------------------------------------------------------------------------------
-# Project. Normally you use the project your account already has ("default"). With
+# Project. Defaults to the cgc-demo project (create it with --create-project), or pass --project to use one your account already has. With
 # create_project = true (npm run setup -- --create-project) a brand-new project is created
 # instead, and `terraform destroy` deletes it again with everything in it. That is the easy
 # way to try the whole setup from scratch, as a new user would see it.
@@ -206,13 +206,16 @@ resource "launchdarkly_flag_trigger" "kill_switch" {
 # A second, independent trigger for the same instruction (turn the flag off), so New Relic's alert
 # can remediate automatically without touching the button above: the page's "Fire kill switch"
 # keeps working exactly as before, on its own URL. LaunchDarkly supports several triggers per flag,
-# each with its own one-time URL; New Relic has no dedicated trigger integration; its docs say to
-# point a Workflow's webhook destination at a generic trigger URL, same as this one.
+# each with its own one-time URL. The type comes from var.new_relic_trigger_integration: generic by
+# default, because the launchdarkly provider (3.1.5 and 3.1.7) only accepts the deprecated
+# "new-relic-apm" and rejects LaunchDarkly's current "new-relic-apm-v2" (shown as "New Relic" in the
+# UI). The webhook behaves the same either way. Changing the type re-creates the trigger, so its
+# URL changes: re-run `npm run newrelic`.
 resource "launchdarkly_flag_trigger" "new_relic_alert" {
   project_key     = local.project_key
   env_key         = var.environment_key
   flag_key        = launchdarkly_feature_flag.premium_video_tutorials.key
-  integration_key = "generic-trigger"
+  integration_key = var.new_relic_trigger_integration
   enabled         = true
 
   instructions = {

@@ -1,7 +1,13 @@
 variable "project_key" {
-  description = "LaunchDarkly project key. A new trial account has a project called \"default\"."
+  description = "LaunchDarkly project key. Defaults to the cgc-demo project this repo creates; a new trial account instead has one called \"default\"."
   type        = string
-  default     = "default"
+  default     = "cgc-demo"
+}
+
+variable "new_relic_trigger_integration" {
+  description = "Trigger type for the New Relic auto-remediation trigger. \"generic-trigger\" works with every provider version. Set TF_VAR_new_relic_trigger_integration=new-relic-apm-v2 (LaunchDarkly's current \"New Relic\" type) once the launchdarkly provider accepts it; \"new-relic-apm\" is the deprecated type."
+  type        = string
+  default     = "generic-trigger"
 }
 
 variable "environment_key" {

@@ -81,12 +81,12 @@ if (ldClient && changeTrackingEnabled()) {
     // Reads back whichever trigger (ours, or New Relic's own) most recently fired on this flag, so
     // the New Relic marker can say exactly which one caused this change, not just "a trigger did".
     const triggerEventName = await latestTriggerEventName({
-      flagKey: key, project: process.env.LD_PROJECT_KEY ?? 'default', environment: process.env.LD_ENV_KEY ?? 'test', token: process.env.LD_API_TOKEN,
+      flagKey: key, project: process.env.LD_PROJECT_KEY ?? 'cgc-demo', environment: process.env.LD_ENV_KEY ?? 'test', token: process.env.LD_API_TOKEN,
     });
     // Only worth asking when no trigger explains the change: a plain UI or API edit has no trigger
     // body to read, but LaunchDarkly's audit log already has a one-line summary of it.
     const auditTitle = triggerEventName ? null : await latestAuditTitle({
-      flagKey: key, project: process.env.LD_PROJECT_KEY ?? 'default', token: process.env.LD_API_TOKEN,
+      flagKey: key, project: process.env.LD_PROJECT_KEY ?? 'cgc-demo', token: process.env.LD_API_TOKEN,
     });
     recordFlagChange(key, { state, viaKillSwitch, triggerEventName, auditTitle })
       .then(({ marked }) => console.log(

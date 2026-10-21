@@ -52,5 +52,5 @@ const report = (step, r) => console.log(`  [${icons[r.status]}] ${step}: ${r.det
     process.exit(1);
   }
   console.log('New Relic');
-  for (const [step, r] of await setUpNewRelic({ token, project: env.LD_PROJECT_KEY ?? 'default' })) report(step, r);
+  for (const [step, r] of await setUpNewRelic({ token, project: env.LD_PROJECT_KEY ?? 'cgc-demo' })) report(step, r);
 }
