@@ -69,7 +69,7 @@ npm run teardown                       # type the project key (cgc-demo) to conf
 npm run setup -- --project cgc-demo --create-project
 ```
 
-Teardown removes what setup made: the LaunchDarkly flags, metrics, AI Config, trigger and experiments, the integration subscriptions (New Relic, Slack), and in New Relic the rage-click alert and the kill switch workflow. Change events already recorded in New Relic stay. To use a project you already have instead, run `npm run setup -- --project <its key>` (a Writer token is enough). Details: [Try it from scratch](#try-it-from-scratch-like-a-new-user-scratch-project).
+Teardown removes what setup made: the LaunchDarkly flags, metrics, AI Config, trigger and experiments, the integration subscriptions (New Relic, Slack), and in New Relic the rage-click alert and the kill switch workflow. Change events already recorded in New Relic stay. The account-level pieces (the LaunchDarkly New Relic and Slack integrations, and the New Relic alert, workflow, channel and destination) are removed **last, and only if everything else was removed first**: if teardown stops on an error, they are left in place and it says so, so a failed run never leaves you with the project half-deleted *and* the integration gone. `npm run teardown -- --keep-newrelic` leaves the New Relic integration, alert and workflow alone even on success (a hand-made trigger on a flag is still deleted with that flag or project). To use a project you already have instead, run `npm run setup -- --project <its key>` (a Writer token is enough). Details: [Try it from scratch](#try-it-from-scratch-like-a-new-user-scratch-project).
 
 **What goes in `.env`** (only the lines marked YOU; `npm run setup` writes the rest)
 
@@ -186,7 +186,7 @@ Browser (React, port 5173)                     Node backend (port 3001)
 
 - **Node.js 22.12 or newer** and npm (`node -v`).
 - **[Terraform](https://developer.hashicorp.com/terraform/install)** 1.5 or newer (`terraform version`). On macOS: `brew tap hashicorp/tap && brew install hashicorp/tap/terraform`.
-- A free **[LaunchDarkly trial account](https://launchdarkly.com/start-trial/)**. The trial includes the features used here (experimentation, AI Configs and flag triggers). A new account has a project called `default` with environments `test` and `production`; this README uses `default` and `test`.
+- A free **[LaunchDarkly trial account](https://launchdarkly.com/start-trial/)**. The trial includes the features used here (experimentation, AI Configs and flag triggers). A new account has a project called `default` with environments `test` and `production`; this README uses a `cgc-demo` project (created in Get started) and `test`; to use `default` instead, pass `--project default`.
 - Optional, for real chatbot replies: **[Ollama](https://ollama.com/download)** (free, runs models on your machine, about 3.3 GB of downloads). `npm run ollama` installs it with Homebrew on macOS and downloads the models (no LaunchDarkly account or token involved); `npm run setup -- --install-ollama` does the same as its last step. Without Ollama the chatbot returns canned replies and everything else still works.
 - Optional: a free New Relic account (browser and APM agents) and a Slack workspace (flag notifications).
 
@@ -215,9 +215,9 @@ npm run setup                         # add --install-ollama to install Ollama t
 
 Everything it creates is left **on** and ready: both flags are enabled, the chatbot works, and both experiments are running. The flag keeps a dark default, and its experiment runs on its own "trial users" rule (Jo and Riley), so the targeting demo stays predictable.
 
-Options: `--project <key>` and `--env <key>` (defaults `default` and `test`), `--create-project` (make a new project with that key), `--dry-run`, `--install-ollama`, `--skip-models`, `--no-experiments`, `--slack-webhook-url <url>` (also posts every flag change to Slack; or set `SLACK_WEBHOOK_URL` in `.env`).
+Options: `--project <key>` and `--env <key>` (defaults `cgc-demo` and `test`), `--create-project` (make a new project with that key), `--dry-run`, `--install-ollama`, `--skip-models`, `--no-experiments`, `--slack-webhook-url <url>` (also posts every flag change to Slack; or set `SLACK_WEBHOOK_URL` in `.env`).
 
-The **project key** is the short ID of your LaunchDarkly project (`default` in a new account), visible in LaunchDarkly URLs such as `.../projects/default/...` and under Project settings. It is not the SDK key.
+The **project key** is the short ID of your LaunchDarkly project (`cgc-demo` here; `default` in a new account), visible in LaunchDarkly URLs such as `.../projects/cgc-demo/...` and under Project settings. It is not the SDK key.
 
 The script prints a summary. Anything marked `[!]` did not complete (for example a plan without flag triggers) and says what to finish by hand; the [manual setup](#manual-setup-instead-of-the-script) covers each part. What it deliberately does not do:
 
@@ -307,6 +307,8 @@ Copy `.env.example` to `.env`. It is git-ignored; never commit it.
 | `NR_ACCOUNT_ID`, `NR_BROWSER_APP_ID`, `NR_BROWSER_LICENSE_KEY` | New Relic: Add data, Browser monitoring, copy/paste snippet | Browser agent (optional) |
 | `NR_APM_LICENSE_KEY`, `NR_APM_APP_NAME`, `NR_APM_AIM_ENABLED` | New Relic: Add data, Node.js. `NR_APM_APP_NAME` must be the name both apps report under | Backend APM agent (optional) |
 | `NR_USER_KEY` | New Relic: profile menu, API keys, Create key, type **User** | `npm run setup`, `npm run newrelic`, `npm run teardown`, `npm run incident` (optional) |
+| `NR_TRIGGER_ID` | Only when the New Relic trigger was not made by this folder's Terraform (for example a hand-made one): the id is the segment after `/webhook/triggers/` in its URL. Wins over Terraform's output | `npm run incident -- --auto-remediation` (optional) |
+| `TF_VAR_new_relic_trigger_integration` | Optional. Leave unset for `generic-trigger`; set `new-relic-apm-v2` once the launchdarkly provider accepts it (see [Automated remediation](#automated-remediation-let-new-relic-pull-the-kill-switch-itself)) | `npm run setup` (passed through to Terraform) |
 | `SLACK_WEBHOOK_URL` | Slack: an incoming webhook (see Integrations, Slack) | `npm run setup` and `npm run teardown` (optional) |
 | `OPENAI_API_KEY`, `OLLAMA_URL` | Optional: OpenAI key (for `gpt-...` models); Ollama address if not the default | Chat backend |
 | `NR_API_URL`, `NR_BACKEND_CHANGE_TRACKING` | Rarely needed, commented out in `.env.example`: EU accounts' NerdGraph address; the fallback that posts flag-change markers from the chat backend | New Relic scripts, chat backend |
@@ -374,7 +376,7 @@ The "Add adaptive trigger" button you see on individual targeting rules is a dif
 Command-line alternative (needs `$LD_API_TOKEN`):
 
 ```bash
-curl -X POST "https://app.launchdarkly.com/api/v2/flags/default/premium-video-tutorials/triggers/test" \
+curl -X POST "https://app.launchdarkly.com/api/v2/flags/cgc-demo/premium-video-tutorials/triggers/test" \
   -H "Authorization: $LD_API_TOKEN" -H "Content-Type: application/json" \
   -d '{"integrationKey": "generic-trigger", "instructions": [{"kind": "turnFlagOff"}]}'
 ```
@@ -480,7 +482,7 @@ LaunchDarkly records who or what turned the flag off, here the generic trigger:
 **If your account has no flag triggers:** turn the flag off through the REST API instead (needs `$LD_API_TOKEN`), which has the same effect:
 
 ```bash
-curl -X PATCH "https://app.launchdarkly.com/api/v2/flags/default/premium-video-tutorials" \
+curl -X PATCH "https://app.launchdarkly.com/api/v2/flags/cgc-demo/premium-video-tutorials" \
   -H "Authorization: $LD_API_TOKEN" \
   -H "Content-Type: application/json; domain-model=launchdarkly.semanticpatch" \
   -d '{"environmentKey": "test", "instructions": [{"kind": "turnFlagOff"}]}'
@@ -752,7 +754,7 @@ The APM agent reports the Node backend:
 
    Both subscriptions work: each flag change lands on the APM and the Browser entity, so the marker shows on either app's charts. (This relies on the integration taking the entity's `entity.guid`, which setup looks up for you.)
 
-   **Which kill switch fired?** Both kill switches are flag triggers, and a trigger fire reads the same in New Relic: `Generic trigger made changes to the flag …`. LaunchDarkly's flag history tells them apart, because each caller sends an `eventName` that the trigger records: **`Manual kill switch: pressed on the CGC Prep page was triggered`** (the page's button, from [`server/index.js`](server/index.js)) or **`New Relic auto-remediation: the rage-click alert opened an issue was triggered`** (New Relic's workflow). From any marker in New Relic, follow `launchdarklyAuditLogUrl` to see which.
+   **Which kill switch fired?** Both kill switches are flag triggers, Generic by default, so a trigger fire reads the same in New Relic: `Generic trigger made changes to the flag …` (if you opt in to the New Relic trigger type for the automated one, [see below](#automated-remediation-let-new-relic-pull-the-kill-switch-itself), its marker text may read differently). LaunchDarkly's flag history tells them apart, because each caller sends an `eventName` that the trigger records: **`Manual kill switch: pressed on the CGC Prep page was triggered`** (the page's button, from [`server/index.js`](server/index.js)) or **`New Relic auto-remediation: the rage-click alert opened an issue was triggered`** (New Relic's workflow). From any marker in New Relic, follow `launchdarklyAuditLogUrl` to see which.
 
    *Fallback without the integration:* [`server/changeTracking.js`](server/changeTracking.js) can write the same markers from the chat backend instead, through NerdGraph. It is **off by default**, because running it alongside the integration marks every change twice; set `NR_BACKEND_CHANGE_TRACKING=true` to use it.
 
@@ -792,7 +794,7 @@ The APM agent reports the Node backend:
 
 ### Automated remediation: let New Relic pull the kill switch itself
 
-The steps above are a person watching the alert and pressing **Fire kill switch**. The best practice once that works is to take the person out of the loop: a New Relic [Workflow](https://launchdarkly.com/docs/integrations/new-relic/triggers) fires a webhook the moment the rage-click alert opens an issue, and the webhook is a LaunchDarkly flag trigger. Detection to remediation with no one awake. It is **off by default** here, so a live demo stays manual.
+The steps above are a person watching the alert and pressing **Fire kill switch**. The best practice once that works is to take the person out of the loop: a New Relic [Workflow](https://launchdarkly.com/docs/integrations/new-relic/triggers) fires a webhook the moment the rage-click alert opens an issue, and the webhook is a LaunchDarkly flag trigger (a **Generic trigger** by default; LaunchDarkly's current **New Relic** trigger type, `new-relic-apm-v2`, is opt-in, see below). Detection to remediation with no one awake. It is **off by default** here, so a live demo stays manual.
 
 ```bash
 npm run newrelic                              # set it all up (npm run setup does this too); safe to re-run
@@ -814,7 +816,14 @@ npm run incident -- --auto-remediation        # rehearse it: on for this run onl
 
 **It checks which trigger fired, not just that the flag changed.** `--auto-remediation` waits for the New Relic trigger's own `_lastTriggeredAt` to advance, rather than for the flag to merely go off: the flag can go off some other way too (a person pressing the page's button, or editing the flag directly), while New Relic is still deciding, and polling only "is it off" would wrongly credit New Relic for a change it had nothing to do with. Tested: it happened, once, before this check existed. If the timeout is reached, it says plainly whether the flag is off anyway (so you can tell "New Relic never fired" from "it fired but after the limit").
 
-**Why a second trigger, not the same one.** LaunchDarkly flags support several triggers at once, each with its own one-time URL ([`terraform/main.tf`](terraform/main.tf), `launchdarkly_flag_trigger.new_relic_alert`, output `new_relic_trigger_url`). The page's button keeps its own trigger (`LD_TRIGGER_URL`); neither touches the other's URL, rate limit or history. If the trigger is ever re-created its URL changes; re-run `npm run newrelic` and the destination follows it.
+**Why a second trigger, not the same one.** LaunchDarkly flags support several triggers at once, each with its own one-time URL ([`terraform/main.tf`](terraform/main.tf), `launchdarkly_flag_trigger.new_relic_alert`, output `new_relic_trigger_url`). The page's button keeps its own Generic trigger (`LD_TRIGGER_URL`); neither touches the other's URL, rate limit or history. If the trigger is ever re-created its URL changes; re-run `npm run newrelic` and the destination follows it.
+
+**Generic by default, New Relic type opt-in.** LaunchDarkly has a dedicated New Relic trigger type ([docs](https://launchdarkly.com/docs/integrations/new-relic/triggers)); in Terraform it is the same `launchdarkly_flag_trigger` resource with `integration_key = "new-relic-apm-v2"` (the `new-relic-apm` entry marked *Deprecated* in LaunchDarkly's list is the old one). The launchdarkly provider (3.1.5, the locked version, and 3.1.7, the latest at the time of writing) validates `integration_key` against a fixed list that only has the deprecated key, so `terraform validate` rejects `-v2`. That is why the trigger is `generic-trigger` unless you set `new_relic_trigger_integration`. Two ways to get the New Relic type:
+
+   - **Once a provider release accepts it:** raise the constraint in `terraform/versions.tf`, run `terraform -chdir=terraform init -upgrade`, and put `TF_VAR_new_relic_trigger_integration=new-relic-apm-v2` in `.env` (setup passes it through to Terraform).
+   - **By hand:** create the trigger in LaunchDarkly (type **New Relic**, action **Turn flag off**), point the New Relic destination at its URL, and put its id (the segment after `/webhook/triggers/` in the URL) in `.env` as `NR_TRIGGER_ID` so `npm run incident -- --auto-remediation` can tell it fired. `NR_TRIGGER_ID` wins over Terraform's output when both exist.
+
+The URL is used the same way, as a webhook destination, so the New Relic side is unchanged. LaunchDarkly's docs describe a plain webhook channel; whether the custom `eventName` body this repo sends is still recorded in flag history for this trigger type is worth confirming in the flag's history after a run.
 
 **Why the alert closes now (it took three attempts to get right).** An alert that counts rage clicks gets *no data at all* once the kill switch works, because nobody can click a card that is gone, and that broke the issue closing in three different ways before landing on a config that actually works:
    - **Fill `NONE`** (the original config): no data means no value at all, so there's nothing to compare against the threshold. The issue stays open until the violation time limit (72 hours by default).
@@ -925,7 +934,7 @@ npm test
 | `terraform apply` fails with "already exists" | Something with the same key was created earlier in that project. Try `npm run teardown`, or (more reliable once experiments have run, see above) set up in a scratch project: `npm run setup -- --project cgc-demo --create-project`. |
 | `npm run teardown` fails with 409 "still in use in the following experiments" | Only in an existing project, where experiments cannot be deleted through the API. In a scratch project (`--create-project`) teardown deletes the whole project and avoids this. |
 | `terraform` not found | Install Terraform (see [Prerequisites](#1-prerequisites)). |
-| `--create-project` fails with a permissions error | Creating a project needs a token with Admin or Owner permissions. Use an existing project (the default) with a Writer token, or create the token with a higher role. |
+| `--create-project` fails with a permissions error | Creating a project needs a token with Admin or Owner permissions. Use an existing project (`--project <its key>`, without `--create-project`) with a Writer token, or create the token with a higher role. |
 | `npm run setup` says a step needs manual work | The step's message names the LaunchDarkly response. Use the matching manual step above. |
 | Build fails with "looks like a server-side SDK key" | `LD_CLIENT_ID` holds an `sdk-...` value. Put the client-side ID there and the SDK key in `LD_SDK_KEY`. |
 

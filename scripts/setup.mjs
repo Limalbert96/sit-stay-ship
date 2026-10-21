@@ -14,7 +14,7 @@
 //   export LD_API_TOKEN=api-...          (or set it yourself, or put LD_API_TOKEN=... in .env)
 //   npm run setup -- --dry-run           (terraform plan only; nothing is changed)
 //
-// Options: --project default  --env test  --skip-models  --install-ollama  --no-experiments
+// Options: --project cgc-demo  --env test  --skip-models  --install-ollama  --no-experiments
 //          --slack-webhook-url <url>
 //          --create-project   create a brand-new project with the key given by --project (a scratch
 //                             space to try everything from scratch; delete it with npm run teardown)
@@ -30,7 +30,7 @@ if (existsSync('.env')) process.loadEnvFile('.env'); // real shell variables win
 
 const { values: args } = parseArgs({
   options: {
-    project: { type: 'string', default: process.env.LD_PROJECT_KEY || 'default' },
+    project: { type: 'string', default: process.env.LD_PROJECT_KEY || 'cgc-demo' },
     env: { type: 'string', default: process.env.LD_ENV_KEY || 'test' },
     'dry-run': { type: 'boolean', default: false },
     'skip-models': { type: 'boolean', default: false },

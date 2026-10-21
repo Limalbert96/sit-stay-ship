@@ -167,7 +167,7 @@ async function crowd({ visitors, chaos, rageClicks, linger, spreadMs }) {
 // --- the LaunchDarkly side ----------------------------------------------------------------------
 
 async function turnFlagOn() {
-  const project = process.env.LD_PROJECT_KEY ?? 'default';
+  const project = process.env.LD_PROJECT_KEY ?? 'cgc-demo';
   const environment = process.env.LD_ENV_KEY ?? 'test';
   const res = await fetch(`https://app.launchdarkly.com/api/v2/flags/${project}/premium-video-tutorials`, {
     method: 'PATCH',
@@ -226,14 +226,16 @@ if (!existsSync(CHROME)) {
 const auto = args['auto-remediation'];
 // The trigger New Relic's workflow calls has its own id (see terraform/outputs.tf); reading it from
 // state, rather than hardcoding it, means a re-created trigger (new id, new URL) is picked up
-// automatically.
+// automatically. On a machine without the Terraform state, set NR_TRIGGER_ID in .env instead (the
+// id is the segment after /webhook/triggers/ in the trigger URL, or `_id` in the flag's triggers API).
 const NR_TRIGGER_ID = auto
-  ? spawnSync('terraform', ['-chdir=terraform', 'output', '-raw', 'new_relic_trigger_id'], { encoding: 'utf8' }).stdout.trim()
+  ? process.env.NR_TRIGGER_ID
+    || spawnSync('terraform', ['-chdir=terraform', 'output', '-raw', 'new_relic_trigger_id'], { encoding: 'utf8' }).stdout.trim()
   : null;
 const nerdgraph = auto && nerdGraphClient({ userKey: process.env.NR_USER_KEY, url: process.env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
 
 async function flagIsOn() {
-  const project = process.env.LD_PROJECT_KEY ?? 'default';
+  const project = process.env.LD_PROJECT_KEY ?? 'cgc-demo';
   const environment = process.env.LD_ENV_KEY ?? 'test';
   const res = await fetch(`https://app.launchdarkly.com/api/v2/flags/${project}/premium-video-tutorials?env=${environment}`, {
     headers: { Authorization: process.env.LD_API_TOKEN },
@@ -247,7 +249,7 @@ async function flagIsOn() {
 // would have wrongly reported it as the automated path). Checking the New Relic trigger's own
 // _lastTriggeredAt is how the script knows which one actually fired.
 async function newRelicTriggerFiredAfter(since) {
-  const project = process.env.LD_PROJECT_KEY ?? 'default';
+  const project = process.env.LD_PROJECT_KEY ?? 'cgc-demo';
   const environment = process.env.LD_ENV_KEY ?? 'test';
   const res = await fetch(`https://app.launchdarkly.com/api/v2/flags/${project}/premium-video-tutorials/triggers/${environment}`, {
     headers: { Authorization: process.env.LD_API_TOKEN },
