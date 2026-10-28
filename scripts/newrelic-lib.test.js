@@ -1,12 +1,30 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  RAGE_CLICK_EXPIRATION, RAGE_CLICK_SIGNAL, rageClickQuery, stepNewRelicIntegration, tearDownNewRelicAlerting, subscriptionBody, subscriptionName,
-  tearDownNewRelicIntegration,
+  RAGE_CLICK_EXPIRATION, RAGE_CLICK_SIGNAL, WEBHOOK_PAYLOAD, entitySearchQuery, guidsFromSearch, rageClickQuery, stepNewRelicIntegration,
+  tearDownNewRelicAlerting, subscriptionBody, tearDownNewRelicIntegration,
 } from './newrelic-lib.mjs';
 
 const guid = (s) => Buffer.from(s).toString('base64').replace(/=+$/, '');
 const APM_GUID = guid('1234567|APM|APPLICATION|1000000001');
 const BROWSER_GUID = guid('1234567|BROWSER|APPLICATION|1000000002');
+
+describe('entitySearchQuery', () => {
+  it('looks for both the APM and the browser entity of one app name', () => {
+    const q = entitySearchQuery({ name: 'Canine Good Citizen', accountId: '1234567' });
+    expect(q).toContain("name = 'Canine Good Citizen'");
+    expect(q).toContain("domain IN ('APM', 'BROWSER')");
+    expect(q).toContain('accountId = 1234567');
+  });
+});
+
+describe('guidsFromSearch', () => {
+  it('sorts the two applications by domain, and copes with neither being there', () => {
+    expect(guidsFromSearch({ actor: { entitySearch: { results: { entities: [
+      { guid: 'b', domain: 'BROWSER' }, { guid: 'a', domain: 'APM' },
+    ] } } } })).toEqual({ apm: 'a', browser: 'b' });
+    expect(guidsFromSearch({})).toEqual({ apm: undefined, browser: undefined });
+  });
+});
 
 describe('subscriptionBody', () => {
   it('is named after the entity, points at its entity.guid, and covers every environment of the one project', () => {
@@ -40,14 +58,13 @@ describe('stepNewRelicIntegration', () => {
     ]);
   });
 
-  it('adopts and renames a subscription made under the old name, instead of adding a duplicate', async () => {
-    const items = [{ _id: 'old', name: subscriptionName('apm').replace('Canine Good Citizen [APM]', 'CGC Prep: flag changes to New Relic (apm)') }];
-    const api = fakeApi(items);
-    await stepNewRelicIntegration({ api, project: 'cgc-demo' }, { ...args, guids: { apm: APM_GUID } });
-    const [method, path, patch] = api.mock.calls.find(([m]) => m === 'PATCH');
-    expect(method).toBe('PATCH');
-    expect(path).toBe('/integrations/new-relic-apm-v2/old');
-    expect(patch).toContainEqual({ op: 'replace', path: '/name', value: 'Canine Good Citizen [APM]' });
+  it('updates a subscription that already exists, instead of adding a duplicate', async () => {
+    const api = fakeApi([{ _id: 'existing', name: 'Canine Good Citizen [APM]' }]);
+    const [result] = await stepNewRelicIntegration({ api, project: 'cgc-demo' }, { ...args, guids: { apm: APM_GUID } });
+    expect(result.status).toBe('exists');
+    expect(posted(api)).toEqual([]);
+    const [, path, patch] = api.mock.calls.find(([m]) => m === 'PATCH');
+    expect(path).toBe('/integrations/new-relic-v2/existing');
     expect(patch).toContainEqual({ op: 'replace', path: '/config', value: { apiKey: 'NRAK-x', entityGuid: APM_GUID, domain: 'api.newrelic.com' } });
   });
 
@@ -69,7 +86,7 @@ describe('tearDownNewRelicIntegration', () => {
     const items = [{ _id: 'a', name: 'Canine Good Citizen [APM]', tags: ['cgc-prep'] }, { _id: 'b', name: 'Someone else', tags: [] }];
     const api = vi.fn(async (method) => (method === 'GET' ? { status: 200, data: { items } } : { status: 0, data: {} }));
     const results = await tearDownNewRelicIntegration({ api });
-    expect(api.mock.calls.filter(([m]) => m === 'DELETE').map(([, path]) => path)).toEqual(['/integrations/new-relic-apm-v2/a']);
+    expect(api.mock.calls.filter(([m]) => m === 'DELETE').map(([, path]) => path)).toEqual(['/integrations/new-relic-v2/a']);
     expect(results[0].detail).toMatch(/would delete/);
   });
 });
@@ -116,6 +133,14 @@ describe('tearDownNewRelicAlerting', () => {
       ? { actor: { account: { aiNotifications: { destinations: { entities: [] }, channels: { entities: [] } }, aiWorkflows: { workflows: { entities: [] } } } } }
       : { actor: { account: { alerts: { nrqlConditionsSearch: { nrqlConditions: [] } } } } }));
     expect((await tearDownNewRelicAlerting(nerdgraph, { accountId: '1' }))[0].detail).toMatch(/no New Relic alert/);
+  });
+});
+
+describe('WEBHOOK_PAYLOAD', () => {
+  it('sends the fields LaunchDarkly\'s New Relic trigger suggests, plus the eventName flag history shows', () => {
+    expect(WEBHOOK_PAYLOAD).toContain('"incident_url": {{ json issuePageUrl }}');
+    expect(WEBHOOK_PAYLOAD).toContain('"condition_name": {{ json accumulations.conditionName }}');
+    expect(WEBHOOK_PAYLOAD).toContain('"eventName": "New Relic auto-remediation: the rage-click alert opened an issue"');
   });
 });
 

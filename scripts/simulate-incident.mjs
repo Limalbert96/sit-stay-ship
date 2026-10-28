@@ -184,8 +184,8 @@ async function turnFlagOn() {
   if (!res.ok) throw new Error(`LaunchDarkly refused to turn the flag on (status ${res.status})`);
 }
 
-// Through the backend, not straight to the trigger URL: that is what the page's button does, and it
-// is what lets the backend label the New Relic marker as the kill switch rather than an edit.
+// Through the backend, not straight to the trigger URL: that is exactly what the page's button
+// does, including the eventName that names the manual kill switch in flag history.
 async function fireKillSwitch() {
   const res = await fetch(`${args.api}/api/kill-switch`, { method: 'POST' });
   const body = await res.json().catch(() => ({}));
@@ -226,8 +226,9 @@ if (!existsSync(CHROME)) {
 const auto = args['auto-remediation'];
 // The trigger New Relic's workflow calls has its own id (see terraform/outputs.tf); reading it from
 // state, rather than hardcoding it, means a re-created trigger (new id, new URL) is picked up
-// automatically. On a machine without the Terraform state, set NR_TRIGGER_ID in .env instead (the
-// id is the segment after /webhook/triggers/ in the trigger URL, or `_id` in the flag's triggers API).
+// automatically. Without this folder's Terraform state (for example a trigger made by hand, or
+// set up from another machine), NR_TRIGGER_ID in .env names it instead: the id is the segment after
+// /webhook/triggers/ in the trigger URL.
 const NR_TRIGGER_ID = auto
   ? process.env.NR_TRIGGER_ID
     || spawnSync('terraform', ['-chdir=terraform', 'output', '-raw', 'new_relic_trigger_id'], { encoding: 'utf8' }).stdout.trim()
@@ -285,7 +286,7 @@ if (auto) {
     process.exit(1);
   }
   if (!NR_TRIGGER_ID) {
-    console.error('Could not read new_relic_trigger_id from Terraform output. Run npm run setup (or terraform apply) first.');
+    console.error('Could not find the New Relic trigger id. Run npm run setup (or terraform apply) first, or put NR_TRIGGER_ID in .env.');
     process.exit(1);
   }
   const before = await autoRemediationEnabled(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID });

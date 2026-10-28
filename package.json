@@ -14,7 +14,6 @@
     "dev:web": "vite",
     "setup": "node scripts/setup.mjs",
     "teardown": "node scripts/teardown.mjs",
-    "experiments": "node scripts/experiments.mjs",
     "ollama": "node scripts/ollama-setup.mjs",
     "incident": "node scripts/simulate-incident.mjs",
     "newrelic": "node scripts/newrelic.mjs"
