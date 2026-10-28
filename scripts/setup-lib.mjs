@@ -41,7 +41,7 @@ export function readEnvValue(text, key) {
 }
 
 // What Terraform's state file says about this checkout: which LaunchDarkly project its resources
-// belong to, and whether Terraform created that project (--create-project). Setup uses it to avoid
+// belong to, and whether Terraform created that project. Setup uses it to avoid
 // two dangerous mistakes: pointing existing state at a different project (Terraform would delete
 // the resources in the old one), and dropping create_project (Terraform would delete the project).
 export function inspectTerraformState(stateText) {
@@ -102,10 +102,10 @@ export const failed = (what, res) => ({ status: 'manual', detail: `${what} (Laun
 // ---- Account-level integration subscriptions ------------------------------------------------
 // LaunchDarkly integrations (New Relic, Slack) are subscriptions on the account, not part of a
 // project, so deleting a project leaves them behind. Ours carry the cgc-prep tag, whatever they are
-// named; `legacyName` also catches one made under an older name. A dry run (status 0) only reports.
-export async function tearDownSubscriptions({ api }, { integration, label, legacyName }) {
+// named. A dry run (status 0) only reports.
+export async function tearDownSubscriptions({ api }, { integration, label }) {
   const list = await api('GET', `/integrations/${integration}`);
-  const ours = (list.data?.items ?? []).filter((s) => s.tags?.includes('cgc-prep') || (legacyName && s.name?.startsWith(legacyName)));
+  const ours = (list.data?.items ?? []).filter((s) => s.tags?.includes('cgc-prep'));
   const results = [];
   for (const s of ours) {
     const res = await api('DELETE', `/integrations/${integration}/${s._id}`);
@@ -124,7 +124,7 @@ export async function tearDownSubscriptions({ api }, { integration, label, legac
 // scratch project is deleted whole (its children are dropped from state first), so it is removed
 // here through the API instead.
 export const tearDownSlackSubscription = (ctx) =>
-  tearDownSubscriptions(ctx, { integration: 'slack', label: 'Slack', legacyName: 'CGC Prep: flag changes in Slack' });
+  tearDownSubscriptions(ctx, { integration: 'slack', label: 'Slack' });
 
 // ---- AI Config default rule and experiments ------------------------------------------------
 // Each step returns { status: 'created' | 'exists' | 'manual', detail } and never throws, so
@@ -192,7 +192,7 @@ export async function stepExperiment({ api, project, envKey }, def) {
     if (!rule?._id) return { status: 'manual', detail: `${def.key}: the rule "${def.ruleDescription}" was not found on ${def.flagKey}. Run terraform apply (npm run setup) first.` };
     ruleId = rule._id;
     if (flag.data.environments?.[envKey]?.on === false) {
-      return { status: 'manual', detail: `${def.key}: ${def.flagKey} is off in ${envKey}, and an experiment cannot start on a flag that is off. Turn it on, then run npm run experiments.` };
+      return { status: 'manual', detail: `${def.key}: ${def.flagKey} is off in ${envKey}, and an experiment cannot start on a flag that is off. Turn it on, then run npm run setup again.` };
     }
     treatments = [
       { name: 'Videos shown', baseline: false, variationId: on },
@@ -236,9 +236,9 @@ export async function stepExperiment({ api, project, envKey }, def) {
 
 // ---- Teardown ---------------------------------------------------------------------------------
 
-// Everything the demo has ever created, so a clean-up also catches resources made by hand or by
-// earlier versions of this project. Sample resources from LaunchDarkly (ld-example-*) are left alone.
-export const DEMO_FLAG_KEYS = ['premium-video-tutorials', 'exam-progress-tracker', 'ai-chatbot-config', 'beta-exam-tracker'];
+// Everything the demo creates, so a clean-up also catches the same resources made by hand.
+// Sample resources from LaunchDarkly (ld-example-*) are left alone.
+export const DEMO_FLAG_KEYS = ['premium-video-tutorials', 'exam-progress-tracker'];
 export const DEMO_METRIC_KEYS = ['clicked-start-training', 'ai-response-helpful'];
 
 // Stop (if running) and archive every non-sample experiment in the environment. Experiments

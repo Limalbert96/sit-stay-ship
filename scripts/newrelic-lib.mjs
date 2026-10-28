@@ -1,18 +1,18 @@
 // New Relic wiring for the demo, used by `npm run setup` and `npm run newrelic`. Two halves:
 //
-// 1. LaunchDarkly -> New Relic: LaunchDarkly's New Relic integration (`new-relic-apm-v2`) writes
+// 1. LaunchDarkly -> New Relic: LaunchDarkly's New Relic integration (`new-relic-v2`) writes
 //    every flag change to New Relic as a FEATURE_FLAG change tracking event. One subscription marks
 //    one New Relic application, so there are two, named after the entity: "<app> [APM]" for the
 //    Node service and "<app> [Browser]" for the React page. The Browser app also CALLS the APM
 //    service, so APM markers show on Browser charts under "Related Changes" as well.
 //    Pointed at the application by its entity.guid, which NerdGraph returns (nothing goes in .env).
-//    Created through the LaunchDarkly REST API: the Terraform provider (3.1.x) only accepts the
-//    integration keys compiled into it, and this one is newer than that list.
+//    Created through the LaunchDarkly REST API rather than Terraform, because those entity.guids
+//    are only known once New Relic has been asked for them.
 //
-// 2. New Relic -> LaunchDarkly: an alert on rage clicks, and a Workflow that fires a LaunchDarkly
-//    flag trigger when the alert opens an issue (automated kill switch). Created through NerdGraph.
-//    The Workflow is created DISABLED: a live demo uses the page's manual kill switch, and an
-//    enabled Workflow would turn the flag off before the presenter does.
+// 2. New Relic -> LaunchDarkly: an alert on rage clicks, and a Workflow that fires the New Relic
+//    flag trigger (terraform/main.tf) when the alert opens an issue (automated kill switch). Created
+//    through NerdGraph. The Workflow is created DISABLED: a live demo uses the page's manual kill
+//    switch, and an enabled Workflow would turn the flag off before the presenter does.
 //
 // Every step looks its object up by name first and updates it, so running it again is safe, and it
 // adopts objects made by hand with the same names.
@@ -21,13 +21,24 @@
 
 import { spawnSync } from 'node:child_process';
 import { createApi, tearDownSubscriptions } from './setup-lib.mjs';
-import { resolveEntityGuids } from '../server/changeTracking.js';
 
-export const NEW_RELIC_INTEGRATION = 'new-relic-apm-v2';
+export const NEW_RELIC_INTEGRATION = 'new-relic-v2';
 const KIND_LABEL = { apm: 'APM', browser: 'Browser' };
 export const subscriptionName = (kind, appName = 'Canine Good Citizen') => `${appName} [${KIND_LABEL[kind] ?? kind}]`;
-// Earlier versions of this script used this name; a subscription found under it is renamed.
-const legacyName = (kind) => `CGC Prep: flag changes to New Relic (${kind})`;
+
+// Finds the APM and Browser applications by the name both agents report under (NR_APM_APP_NAME):
+// one search returns both, with the entity.guid each subscription is aimed at.
+export function entitySearchQuery({ name, accountId }) {
+  const clauses = [`name = '${name.replace(/'/g, "\\'")}'`, "domain IN ('APM', 'BROWSER')"];
+  if (accountId) clauses.push(`accountId = ${Number(accountId)}`);
+  return `{ actor { entitySearch(query: "${clauses.join(' AND ')}") { results { entities { guid name domain } } } } }`;
+}
+
+export function guidsFromSearch(data) {
+  const entities = data?.actor?.entitySearch?.results?.entities ?? [];
+  const find = (domain) => entities.find((e) => e.domain === domain)?.guid;
+  return { apm: find('APM'), browser: find('BROWSER') };
+}
 
 export const ALERT_CONDITION_NAME = 'Rage Click';
 export const ALERT_POLICY_NAME = 'CGC Prep: bad release';
@@ -62,11 +73,10 @@ export async function stepNewRelicIntegration({ api, project }, { userKey, guids
       continue;
     }
     const body = subscriptionBody({ kind, userKey, guid, domain, project, appName });
-    const found = existing.find((s) => s.name === body.name || s.name === legacyName(kind));
+    const found = existing.find((s) => s.name === body.name);
     if (found) {
       // JSON patch: bring an existing subscription back to this config (the key may have rotated).
       const res = await api('PATCH', `/integrations/${NEW_RELIC_INTEGRATION}/${found._id}`, [
-        { op: 'replace', path: '/name', value: body.name },
         { op: 'replace', path: '/config', value: body.config },
         { op: 'replace', path: '/statements', value: body.statements },
         { op: 'replace', path: '/on', value: true },
@@ -85,7 +95,7 @@ export async function stepNewRelicIntegration({ api, project }, { userKey, guids
 }
 
 export const tearDownNewRelicIntegration = (ctx) =>
-  tearDownSubscriptions(ctx, { integration: NEW_RELIC_INTEGRATION, label: 'New Relic', legacyName: 'CGC Prep: flag changes to New Relic' });
+  tearDownSubscriptions(ctx, { integration: NEW_RELIC_INTEGRATION, label: 'New Relic' });
 
 // ---- 2. New Relic alert and automated kill switch ------------------------------------------
 
@@ -108,6 +118,15 @@ export function nerdGraphClient({ userKey, url = 'https://api.newrelic.com/graph
 // the request's `eventName` ("<eventName> was triggered"), so flag history says which path turned
 // the flag off: this, or the page's manual kill switch (server/index.js sends its own eventName).
 export const AUTO_REMEDIATION_EVENT = 'New Relic auto-remediation: the rage-click alert opened an issue';
+
+// The webhook body New Relic sends. incident_url and condition_name are the fields LaunchDarkly's
+// New Relic trigger type suggests (New Relic fills them in per issue); eventName is the line above.
+// A New Relic payload template, not JSON: the {{ }} parts are filled in when the issue opens.
+export const WEBHOOK_PAYLOAD = `{
+  "incident_url": {{ json issuePageUrl }},
+  "condition_name": {{ json accumulations.conditionName }},
+  "eventName": ${JSON.stringify(AUTO_REMEDIATION_EVENT)}
+}`;
 
 // The alert's signal. Two things have to both be true for the issue to close itself once the kill
 // switch works and rage clicks stop:
@@ -214,7 +233,7 @@ async function lookUp(nerdgraph, accountId) {
 }
 
 const channelProperties = () => [
-  { key: 'payload', value: JSON.stringify({ eventName: AUTO_REMEDIATION_EVENT }) },
+  { key: 'payload', value: WEBHOOK_PAYLOAD },
   { key: 'headers', value: '{}' },
 ];
 
@@ -351,24 +370,22 @@ export async function setUpNewRelic({ token, project, enabled } = {}) {
   const results = [];
   const domain = (env.NR_API_URL ?? '').includes('.eu.') ? 'api.eu.newrelic.com' : 'api.newrelic.com';
   const nerdgraph = nerdGraphClient({ userKey: env.NR_USER_KEY, url: env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
+  const appName = env.NR_APM_APP_NAME ?? 'Canine Good Citizen';
 
   // 1. LaunchDarkly -> New Relic: flag changes as change tracking events on the APM and Browser applications.
   let guids = {};
   try {
-    guids = await resolveEntityGuids({ env: { ...env } });
+    guids = guidsFromSearch(await nerdgraph(entitySearchQuery({ name: appName, accountId: env.NR_ACCOUNT_ID })));
   } catch (err) {
     results.push(['New Relic entities', { status: 'manual', detail: `could not look them up (${err.message})` }]);
   }
   const api = createApi({ token });
-  for (const r of await stepNewRelicIntegration({ api, project }, {
-    userKey: env.NR_USER_KEY,
-    guids,
-    domain,
-    appName: env.NR_APM_APP_NAME ?? 'Canine Good Citizen',
-  })) results.push(['LaunchDarkly -> New Relic', r]);
+  for (const r of await stepNewRelicIntegration({ api, project }, { userKey: env.NR_USER_KEY, guids, domain, appName })) {
+    results.push(['LaunchDarkly -> New Relic', r]);
+  }
 
   // 2. New Relic -> LaunchDarkly: the rage-click alert, and the automated kill switch behind it.
-  const alert = await stepRageClickAlert(nerdgraph, { accountId: env.NR_ACCOUNT_ID, appName: env.NR_APM_APP_NAME ?? 'Canine Good Citizen' });
+  const alert = await stepRageClickAlert(nerdgraph, { accountId: env.NR_ACCOUNT_ID, appName });
   results.push(['rage-click alert', alert]);
   const triggerUrl = spawnSync('terraform', ['-chdir=terraform', 'output', '-raw', 'new_relic_trigger_url'], { encoding: 'utf8' }).stdout.trim();
   if (!alert.policyId) {

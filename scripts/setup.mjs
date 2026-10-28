@@ -1,23 +1,23 @@
 // One-shot setup for anyone who clones this repo: `npm run setup`.
 //
-//   1. Terraform creates everything in LaunchDarkly: flags with their targeting, the two metrics,
-//      the flag trigger (kill switch), the AI Config with its models, optionally Slack.
+//   1. Terraform creates everything in LaunchDarkly: the project (if it does not exist yet), flags
+//      with their targeting, the two metrics, the two flag triggers (the page's kill switch and New
+//      Relic's), the AI Config with its models, and Slack if SLACK_WEBHOOK_URL is set.
 //   2. The outputs (client-side ID, SDK key, trigger URL) are written into .env.
 //   3. The LaunchDarkly API (Terraform has no resource for these) sets the AI Config's default
-//      rule so the chatbot works, then creates and starts the two experiments.
+//      rule so the chatbot works, then creates and starts the two experiments. With NR_USER_KEY
+//      in .env it also wires New Relic: the integration, the rage-click alert and the automated
+//      kill switch (created off).
 //   4. Ollama is installed if you ask, started, and the two local models are pulled.
 //
 // Safe to run again. Needs Terraform (https://developer.hashicorp.com/terraform/install) and a
-// LaunchDarkly API access token (Account settings, Authorization, Access tokens, role Writer):
+// LaunchDarkly API access token (Account settings, Authorization, Access tokens; role Admin to
+// create the project, Writer is enough once it exists):
 //
 //   npm run setup                        (asks for the token the first time and can save it in .env)
-//   export LD_API_TOKEN=api-...          (or set it yourself, or put LD_API_TOKEN=... in .env)
 //   npm run setup -- --dry-run           (terraform plan only; nothing is changed)
 //
 // Options: --project cgc-demo  --env test  --skip-models  --install-ollama  --no-experiments
-//          --slack-webhook-url <url>
-//          --create-project   create a brand-new project with the key given by --project (a scratch
-//                             space to try everything from scratch; delete it with npm run teardown)
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
@@ -36,11 +36,10 @@ const { values: args } = parseArgs({
     'skip-models': { type: 'boolean', default: false },
     'install-ollama': { type: 'boolean', default: false },
     'no-experiments': { type: 'boolean', default: false },
-    'slack-webhook-url': { type: 'string', default: process.env.SLACK_WEBHOOK_URL || '' }, // from .env unless given
-    'create-project': { type: 'boolean', default: false },
   },
 });
 const dryRun = args['dry-run'];
+const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || '';
 
 const token = await getApiToken(); // from the shell or .env, or asked for in a terminal
 if (!token) {
@@ -65,7 +64,7 @@ const tfEnv = {
   ...process.env,
   LAUNCHDARKLY_ACCESS_TOKEN: token,
   TF_IN_AUTOMATION: '1',
-  ...(args['slack-webhook-url'] && { TF_VAR_slack_webhook_url: args['slack-webhook-url'] }),
+  ...(slackWebhookUrl && { TF_VAR_slack_webhook_url: slackWebhookUrl }),
 };
 const terraform = (tfArgs, options = {}) =>
   spawnSync('terraform', ['-chdir=terraform', ...tfArgs], { env: tfEnv, encoding: 'utf8', stdio: options.capture ? ['ignore', 'pipe', 'inherit'] : 'inherit' });
@@ -80,10 +79,14 @@ Remove that first with:  npm run teardown -- --project ${known.projectKey}
 then run setup again.`);
   process.exit(1);
 }
-const createProject = args['create-project'] || known.ownsProject;
+// Terraform creates the project when it does not exist yet, and keeps managing one it created
+// (dropping create_project would make Terraform delete it). That is what lets teardown remove the
+// whole project in one step. An existing project made some other way is only filled in.
+const ctx = { api: createApi({ token }), project: args.project, envKey: args.env };
+const createProject = known.ownsProject || (await ctx.api('GET', `/projects/${args.project}`)).status === 404;
 const vars = ['-var', `project_key=${args.project}`, '-var', `environment_key=${args.env}`, ...(createProject ? ['-var', 'create_project=true'] : [])];
 
-console.log(`Setting up LaunchDarkly project "${args.project}", environment "${args.env}"${dryRun ? ' (dry run: nothing is changed)' : ''}\n`);
+console.log(`Setting up LaunchDarkly project "${args.project}"${createProject && !known.ownsProject ? ' (new: Terraform creates it)' : ''}, environment "${args.env}"${dryRun ? ' (dry run: nothing is changed)' : ''}\n`);
 console.log('1. Terraform');
 if (terraform(['init', '-input=false']).status !== 0) process.exit(1);
 if (dryRun) {
@@ -91,7 +94,9 @@ if (dryRun) {
   process.exit(plan.status ?? 1);
 }
 if (terraform(['apply', '-auto-approve', '-input=false', ...vars]).status !== 0) {
-  console.error('\nTerraform did not finish. Read the error above. If it says a resource "already exists", run npm run teardown first.');
+  console.error(`\nTerraform did not finish. Read the error above.
+  - "already exists": the project has the demo's resources from a run this folder's Terraform state does not know about. Run npm run teardown, then npm run setup.
+  - a permissions error creating the project: creating "${args.project}" needs a token with the Admin or Owner role.`);
   process.exit(1);
 }
 
@@ -99,14 +104,13 @@ console.log('\n2. .env');
 const outputs = JSON.parse(terraform(['output', '-json'], { capture: true }).stdout || '{}');
 if (!existsSync('.env')) copyFileSync('.env.example', '.env');
 // These belong to the project and environment just set up, so they replace older values.
-// The project and environment are remembered so npm run experiments and npm run teardown use them too.
+// The project and environment are remembered so the other scripts (teardown, incident) use them too.
 const updates = { ...envFromTerraformOutputs(outputs), LD_PROJECT_KEY: args.project, LD_ENV_KEY: args.env };
 const merged = mergeEnv(readFileSync('.env', 'utf8'), updates, { overwrite: true });
 if (merged.changed.length) writeFileSync('.env.bak', readFileSync('.env', 'utf8')); // keep your previous values
 writeFileSync('.env', merged.text);
 console.log(`  ${merged.changed.length ? `updated ${merged.changed.join(', ')} (previous file saved as .env.bak)` : 'already up to date'}`);
 
-const ctx = { api: createApi({ token }), project: args.project, envKey: args.env };
 console.log('\n3. AI Config default rule (through the LaunchDarkly API)');
 report('canine-coach-chatbot', await stepAiConfigTargeting(ctx));
 if (!args['no-experiments']) {
@@ -125,7 +129,7 @@ console.log('\n4. Local chatbot models (Ollama)');
 manual.push(...(await setupOllama({ install: args['install-ollama'], skipModels: args['skip-models'] })).manual);
 
 console.log('\nStill to do by hand:');
-if (args['slack-webhook-url']) console.log('  - Slack: flag changes post to your webhook. Change one flag to see the message.');
+if (slackWebhookUrl) console.log('  - Slack: flag changes post to your webhook. Change one flag to see the message.');
 else console.log('  - Slack (optional): put SLACK_WEBHOOK_URL in .env and run npm run setup again (README, Integrations, Slack).');
 if (manual.length) {
   console.log('\nThese steps did not complete on their own, so do them by hand:');

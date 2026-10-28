@@ -17,7 +17,6 @@ import { initAi, LDFeedbackKind } from '@launchdarkly/server-sdk-ai';
 import { findPersona, toContext } from '../src/shared/personas.js';
 import { sdkKey } from './env.js';
 import { generateReply, resolveProvider, warmUp } from './llm.js';
-import { changeTrackingEnabled, latestAuditTitle, latestTriggerEventName, recordFlagChange } from './changeTracking.js';
 
 const PORT = Number(process.env.PORT ?? 3001);
 // Server-side SDK key (LD_SDK_KEY in .env).
@@ -43,57 +42,6 @@ if (SDK_KEY) {
   aiClient = initAi(ldClient);
 } else {
   console.warn('No LD_SDK_KEY in .env: using the local fallback config, no metrics are sent.');
-}
-
-// Optional, off by default (NR_BACKEND_CHANGE_TRACKING=true): mark every flag change on the New
-// Relic APM and Browser entities from here. LaunchDarkly's own New Relic integration
-// (new-relic-apm-v2, created by npm run setup) does the same job without this app running, so this
-// is only a fallback; running both would mark each change twice. The SDK raises
-// "update" whenever a flag is edited in LaunchDarkly, from the UI, the API or the kill-switch
-// trigger. Failures only warn: a demo must not depend on New Relic being reachable.
-
-// The "update" event carries only the flag key, so the resulting on/off state is read back here.
-// allFlagsState is the one call that reports it without sending analytics events, so reading it
-// does not add a fake user to the flag's evaluations. The reason kind is "OFF" only when the flag's
-// own switch is off, which is what a marker should say, whatever the targeting rules serve.
-const PROBE_CONTEXT = { kind: 'user', key: 'sit-stay-ship-change-tracking', anonymous: true };
-async function flagState(key) {
-  try {
-    const state = await ldClient.allFlagsState(PROBE_CONTEXT, { withReasons: true });
-    const reason = state.getFlagReason(key);
-    if (!reason) return undefined;
-    return reason.kind === 'OFF' ? 'off' : 'on';
-  } catch {
-    return undefined; // a marker without the state still beats no marker
-  }
-}
-
-// Set when the page fires the kill switch, so the flag change that follows a second later can be
-// labelled as the kill switch rather than as someone editing a flag.
-let killSwitchFiredAt = 0;
-const KILL_SWITCH_WINDOW_MS = 20_000;
-
-if (ldClient && changeTrackingEnabled()) {
-  console.log('New Relic change tracking on: flag changes will be marked on the APM and Browser entities.');
-  ldClient.on('update', async ({ key }) => {
-    const state = await flagState(key);
-    const viaKillSwitch = state === 'off' && Date.now() - killSwitchFiredAt < KILL_SWITCH_WINDOW_MS;
-    // Reads back whichever trigger (ours, or New Relic's own) most recently fired on this flag, so
-    // the New Relic marker can say exactly which one caused this change, not just "a trigger did".
-    const triggerEventName = await latestTriggerEventName({
-      flagKey: key, project: process.env.LD_PROJECT_KEY ?? 'cgc-demo', environment: process.env.LD_ENV_KEY ?? 'test', token: process.env.LD_API_TOKEN,
-    });
-    // Only worth asking when no trigger explains the change: a plain UI or API edit has no trigger
-    // body to read, but LaunchDarkly's audit log already has a one-line summary of it.
-    const auditTitle = triggerEventName ? null : await latestAuditTitle({
-      flagKey: key, project: process.env.LD_PROJECT_KEY ?? 'cgc-demo', token: process.env.LD_API_TOKEN,
-    });
-    recordFlagChange(key, { state, viaKillSwitch, triggerEventName, auditTitle })
-      .then(({ marked }) => console.log(
-        `Marked "${key}" ${triggerEventName ?? auditTitle ?? (state ? `turned ${state.toUpperCase()}` : 'changed')} on New Relic (${marked.join(' and ')}).`,
-      ))
-      .catch((err) => console.warn(`Could not mark "${key}" on New Relic: ${err.message}`));
-  });
 }
 
 async function loadConfig(persona) {
@@ -184,7 +132,6 @@ app.post('/api/kill-switch', async (_req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ eventName: 'Manual kill switch: pressed on the CGC Prep page' }),
     });
-    if (result.ok) killSwitchFiredAt = Date.now(); // labels the flag change this causes (see above)
     res.status(result.ok ? 200 : 502).json({ fired: result.ok, status: result.status });
   } catch {
     res.status(502).json({ fired: false, error: 'could not reach LaunchDarkly' });
@@ -202,8 +149,8 @@ const server = app.listen(PORT, '127.0.0.1', () => {
   });
 });
 
-// A second copy of the backend is worse than none: it cannot serve the API, but it still holds a
-// LaunchDarkly connection, so every flag change would be marked in New Relic twice. Stop instead.
+// A second copy of the backend cannot serve the API but would still hold a LaunchDarkly
+// connection, so stop it instead.
 server.on('error', async (err) => {
   if (err.code === 'EADDRINUSE') {
     console.error(`Port ${PORT} is already in use, so the chat backend is already running. Stopping this second copy.

@@ -1,11 +1,9 @@
-// Removes everything the demo created in LaunchDarkly, so you can run `npm run setup` from
-// scratch (for example to test the setup the way a first-time user would). It catches resources made by
-// Terraform and also ones made by hand or by earlier versions of this project.
+// Removes everything the demo created, in LaunchDarkly and in New Relic, so you can run
+// `npm run setup` from scratch. It catches resources made by Terraform and the same ones made by hand.
 //
 //   npm run teardown                (asks you to type the project key first)
 //   npm run teardown -- --dry-run   (lists what it would do; changes nothing)
 //   npm run teardown -- --yes       (no question)
-//   npm run teardown -- --keep-newrelic   (never touch the New Relic integration, alert or workflow)
 //
 // Order matters: experiments are stopped and archived first (they block deleting the flags they
 // use and the API cannot delete them), then `terraform destroy`, then anything left over is
@@ -28,11 +26,9 @@ const { values: args } = parseArgs({
     env: { type: 'string', default: process.env.LD_ENV_KEY || 'test' },
     'dry-run': { type: 'boolean', default: false },
     yes: { type: 'boolean', default: false },
-    'keep-newrelic': { type: 'boolean', default: false },
   },
 });
 const dryRun = args['dry-run'];
-const keepNewRelic = args['keep-newrelic'];
 const token = await getApiToken();
 if (!token) {
   console.error(TOKEN_HELP);
@@ -74,35 +70,30 @@ const tfDestroy = () => spawnSync('terraform', ['-chdir=terraform', 'destroy', '
 // automated kill switch live in New Relic, not in LaunchDarkly, so a deleted project would leave
 // them behind (pointing at a dead trigger URL). Both are removed LAST, and only when everything
 // else succeeded: a teardown that stops halfway must not also have taken the integration down.
-// `--keep-newrelic` leaves the New Relic pieces alone even when everything succeeds.
 async function removeAccountLevelIntegrations() {
   console.log('\nIntegrations and New Relic alerting');
   if (problems.length) {
     console.log('  [!] Left in place because teardown did not finish: the LaunchDarkly integrations (New Relic, Slack) and the New Relic alert and workflow. Fix the problems above and run teardown again.');
     return;
   }
-  if (keepNewRelic) {
-    console.log('  [=] --keep-newrelic: the LaunchDarkly New Relic integration and the New Relic alert and workflow are left alone.');
+  for (const result of await tearDownNewRelicIntegration(ctx)) report(result);
+  if (process.env.NR_USER_KEY && process.env.NR_ACCOUNT_ID) {
+    const nerdgraph = nerdGraphClient({ userKey: process.env.NR_USER_KEY, url: process.env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
+    for (const result of await tearDownNewRelicAlerting(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID, dryRun })) report(result);
   } else {
-    for (const result of await tearDownNewRelicIntegration(ctx)) report(result);
-    if (process.env.NR_USER_KEY && process.env.NR_ACCOUNT_ID) {
-      const nerdgraph = nerdGraphClient({ userKey: process.env.NR_USER_KEY, url: process.env.NR_API_URL ?? 'https://api.newrelic.com/graphql' });
-      for (const result of await tearDownNewRelicAlerting(nerdgraph, { accountId: process.env.NR_ACCOUNT_ID, dryRun })) report(result);
-    } else {
-      console.log('  [=] NR_USER_KEY and NR_ACCOUNT_ID are not both in .env, so the New Relic alert and workflow are left alone.');
-    }
+    console.log('  [=] NR_USER_KEY and NR_ACCOUNT_ID are not both in .env, so the New Relic alert and workflow are left alone.');
   }
   for (const result of await tearDownSlackSubscription(ctx)) report(result);
 }
 
 if (ownsProject) {
-  // Setup created this project (--create-project), so deleting the project removes everything in
+  // Setup created this project, so deleting the project removes everything in
   // it, including experiments, which cannot be deleted one by one. Terraform would try to delete
   // each flag and metric first and LaunchDarkly refuses while an experiment uses them, so the
   // children are forgotten (removed from Terraform's state only, nothing is deleted) and just the
   // project is destroyed.
   const children = stateList.split('\n').filter((address) => address && address !== 'launchdarkly_project.demo[0]');
-  console.log(`\nThe project "${args.project}" was created by npm run setup --create-project, so the whole project is deleted with everything in it (flags, metrics, experiments, AI Config).`);
+  console.log(`\nThe project "${args.project}" was created by npm run setup, so the whole project is deleted with everything in it (flags, metrics, experiments, AI Config).`);
   if (dryRun) console.log('  [=] Would delete the project "' + args.project + '" and everything in it.');
   else {
     if (children.length) tf(['state', 'rm', ...children]);
@@ -142,7 +133,7 @@ if (problems.length) {
   console.log('\nSome things could not be removed:');
   for (const p of problems) console.log(`  - ${p}`);
   if (problems.some((p) => /still in use in the following experiments|in use by/i.test(p))) {
-    console.log(`\nLaunchDarkly keeps experiments even after they are archived (they cannot be deleted through the API), and they\nstill block deleting the flags and metrics they used. To start over cleanly, use a scratch project instead:\n  npm run setup -- --project cgc-test --create-project      (and npm run teardown -- --project cgc-test deletes it all)`);
+    console.log(`\nLaunchDarkly keeps experiments even after they are archived (they cannot be deleted through the API), and they\nstill block deleting the flags and metrics they used. This project was not created by npm run setup, so it cannot be\ndeleted whole. Delete it in LaunchDarkly (Project settings), or start over in a new one that setup creates for you:\n  npm run setup -- --project cgc-demo-2      (npm run teardown then deletes it whole)`);
   }
   process.exit(1);
 }
