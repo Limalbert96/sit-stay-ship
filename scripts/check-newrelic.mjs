@@ -186,7 +186,7 @@ try {
   if (!scratch && destination) {
     const live = ((await api('GET', `${flagPath}/triggers/${envKey}`)).data.items ?? []).find((t) => t._id === triggerIdFromUrl(destinationUrl));
     check('destination points at a trigger that still exists', Boolean(live),
-      live ? `${live.integrationKey}, ${live.enabled ? 'enabled' : 'DISABLED'}` : 'stale URL: the trigger was re-created, run npm run newrelic');
+      live ? `${live._integrationKey}, ${live.enabled ? 'enabled' : 'DISABLED'}` : 'stale URL: the trigger was re-created, run npm run newrelic');
   }
 
   // ---- Fire a trigger and watch both sides react -----------------------------------------------------
@@ -240,7 +240,7 @@ try {
     const t = ((await api('GET', `${flagPath}/triggers/${envKey}`)).data.items ?? []).find((x) => x._id === triggerId);
     return t?._lastTriggeredAt >= t0 ? t : null;
   }, 30_000, 2000);
-  check('LaunchDarkly recorded that trigger as fired', Boolean(after), after ? `integration ${after.integrationKey}` : `no _lastTriggeredAt on ${triggerId}`);
+  check('LaunchDarkly recorded that trigger as fired', Boolean(after), after ? `integration ${after._integrationKey}` : `no _lastTriggeredAt on ${triggerId}`);
 
   // The flag history carries the request's eventName; that entry's id is also in the link on the New Relic
   // event, which is how we tell the trigger's change from the "turn on" above. Soft, because the exact
