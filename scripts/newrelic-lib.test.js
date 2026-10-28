@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  RAGE_CLICK_EXPIRATION, RAGE_CLICK_SIGNAL, WEBHOOK_PAYLOAD, entitySearchQuery, guidsFromSearch, rageClickQuery, stepNewRelicIntegration,
+  RAGE_CLICK_EXPIRATION, RAGE_CLICK_SIGNAL, WEBHOOK_PAYLOAD, CHECK_PROJECT_PREFIX, changeEventsQuery, checkSubscriptionLabel, entitySearchQuery, isCheckSubscription, triggerIdFromUrl, guidsFromSearch, rageClickQuery, stepNewRelicIntegration,
   tearDownNewRelicAlerting, subscriptionBody, tearDownNewRelicIntegration,
 } from './newrelic-lib.mjs';
 
@@ -166,5 +166,36 @@ describe('the rage-click alert', () => {
     // respectively despite the underlying query reading zero the entire time. Setting this closed a
     // stuck issue within about a minute.
     expect(RAGE_CLICK_EXPIRATION).toMatchObject({ closeViolationsOnExpiration: true, expirationDuration: 120 });
+  });
+});
+
+describe('changeEventsQuery', () => {
+  it('asks for one flag in one environment, from a given moment', () => {
+    const q = changeEventsQuery({ project: 'cgc-demo', flag: 'premium-video-tutorials', envKey: 'test', sinceMs: 1793125000000 });
+    expect(q).toContain("launchdarklyProjectKey = 'cgc-demo'");
+    expect(changeEventsQuery({ flag: 'f', envKey: 'test', sinceMs: 1 })).not.toContain('launchdarklyProjectKey');
+    expect(q).toContain("featureFlagId = 'premium-video-tutorials'");
+    expect(q).toContain("launchdarklyEnvironmentKey = 'test'");
+    expect(q).toContain('timestamp >= 1793125000000');
+  });
+});
+
+describe('triggerIdFromUrl', () => {
+  it('takes the id out of a trigger URL, and copes with something else', () => {
+    expect(triggerIdFromUrl('https://app.launchdarkly.com/webhook/triggers/6ae0f723c023/abc-secret')).toBe('6ae0f723c023');
+    expect(triggerIdFromUrl('https://example.com/hook')).toBeUndefined();
+    expect(triggerIdFromUrl(undefined)).toBeUndefined();
+  });
+});
+
+describe('check subscriptions', () => {
+  it('recognises the temporary subscriptions of the check, and never the real ones', () => {
+    const label = checkSubscriptionLabel('Canine Good Citizen', `${CHECK_PROJECT_PREFIX}ab12cd`);
+    expect(label).toBe('Canine Good Citizen (check ab12cd)');
+    expect(isCheckSubscription(`${label} [APM]`)).toBe(true);
+    expect(isCheckSubscription(`${label} [Browser]`, 'nr-check-ab12cd')).toBe(true);
+    expect(isCheckSubscription(`${label} [APM]`, 'nr-check-ffffff')).toBe(false);
+    expect(isCheckSubscription('Canine Good Citizen [APM]')).toBe(false);
+    expect(isCheckSubscription(undefined)).toBe(false);
   });
 });
