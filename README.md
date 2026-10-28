@@ -270,6 +270,7 @@ Teardown takes the same one-by-one path when this folder has no Terraform state 
 | `npm run simulate -- --target flag\|ai --users N` | Generates synthetic experiment traffic ([details](#the-traffic-simulator)) |
 | `npm run incident` | Plays out a whole bad-release incident for the New Relic charts ([details](#new-relic-optional-browser-and-apm-agents)); `--auto-remediation` lets New Relic fire the kill switch |
 | `npm run newrelic` | Re-runs just the New Relic wiring (setup does it too); `--auto-remediation on\|off`, `--status` ([details](#automated-remediation-let-new-relic-pull-the-kill-switch-itself)) |
+| `npm run check:newrelic` | A quick API test of both New Relic integrations, with no setup needed; `--scratch`, `--real`, `--keep` ([details](#quick-check-of-the-new-relic-integrations-no-setup-needed)). `npm run check:newrelic:cleanup` removes what `--keep` leaves |
 | `npm test` | Runs the unit tests (Vitest) |
 | `npm run lint` / `npm run build` | Lint and production build |
 
@@ -285,14 +286,14 @@ Copy `.env.example` to `.env`. It is git-ignored; never commit it.
 
 | Variable | Where it comes from | Used by |
 |---|---|---|
-| `LD_API_TOKEN` | LaunchDarkly: Account settings, Authorization, Access tokens (role Admin; Writer once the project exists) | `npm run setup`, `npm run teardown`, `npm run incident` only |
+| `LD_API_TOKEN` | LaunchDarkly: Account settings, Authorization, Access tokens (role Admin; Writer once the project exists) | `npm run setup`, `npm run teardown`, `npm run incident`, `npm run check:newrelic` only |
 | `LD_CLIENT_ID` | LaunchDarkly: Project settings, Environments, your environment, **Client-side ID** | Browser SDK |
 | `LD_SDK_KEY` | Same page, **SDK key** (secret) | Chat backend, traffic simulator (server SDK) |
 | `LD_PROJECT_KEY`, `LD_ENV_KEY` | Written by `npm run setup` (which project and environment you set up) | `npm run teardown`, `npm run newrelic`, `npm run incident` (their default project and environment) |
 | `LD_TRIGGER_URL` | Written by `npm run setup` (the flag trigger URL, below). Secret | Chat backend (the kill switch button), `npm run incident` |
 | `NR_ACCOUNT_ID`, `NR_BROWSER_APP_ID`, `NR_BROWSER_LICENSE_KEY` | New Relic: Add data, Browser monitoring, copy/paste snippet | Browser agent (optional) |
 | `NR_APM_LICENSE_KEY`, `NR_APM_APP_NAME`, `NR_APM_AIM_ENABLED` | New Relic: Add data, Node.js. `NR_APM_APP_NAME` must be the name both apps report under. `NR_APM_AIM_ENABLED=true` turns on AI monitoring for the chatbot (optional) | Backend APM agent (optional) |
-| `NR_USER_KEY` | New Relic: profile menu, API keys, Create key, type **User** | `npm run setup`, `npm run newrelic`, `npm run teardown`, `npm run incident -- --auto-remediation` (optional) |
+| `NR_USER_KEY` | New Relic: profile menu, API keys, Create key, type **User** | `npm run setup`, `npm run newrelic`, `npm run teardown`, `npm run check:newrelic`, `npm run incident -- --auto-remediation` (optional) |
 | `SLACK_WEBHOOK_URL` | Slack: an incoming webhook (see Integrations, Slack) | `npm run setup` and `npm run teardown` (optional) |
 | `OPENAI_API_KEY`, `OLLAMA_URL` | Optional: OpenAI key (for `gpt-...` models); Ollama address if not the default | Chat backend |
 | `NR_TRIGGER_ID` | Only without this folder's Terraform state (a hand-made trigger, or setup run from another machine): the id is the segment after `/webhook/triggers/` in the trigger URL. Wins over Terraform's output | `npm run incident -- --auto-remediation` (optional) |
@@ -827,6 +828,26 @@ And in LaunchDarkly the flag's **Monitoring** tab, Flag history, records the sam
 
 **Switch it off before a manual demo.** The alert opens an issue a minute or two after the rage clicks, and the workflow fires the moment it opens. If you mean to press **Fire kill switch** yourself, an enabled workflow can beat you to it. `npm run newrelic -- --status` tells you where it stands.
 
+### Quick check of the New Relic integrations (no setup needed)
+
+To find out in a minute or two whether both integrations work, without Terraform, a browser or the running app:
+
+```bash
+npm run check:newrelic                  # the whole check (about 1-4 minutes)
+npm run check:newrelic -- --scratch     # always use a throwaway project, never the demo one
+npm run check:newrelic -- --real        # fire the trigger URL the New Relic destination already holds
+npm run check:newrelic -- --keep        # leave what it made, to look at in the UIs
+npm run check:newrelic:cleanup          # remove what --keep (or a crashed run) left behind
+```
+
+It needs `LD_API_TOKEN`, `NR_USER_KEY` and `NR_ACCOUNT_ID` in `.env`, and the New Relic agents to have reported in once (so both applications exist). Nothing is faked: LaunchDarkly really turns a flag off and New Relic really receives the change events. It checks:
+
+- **LaunchDarkly to New Relic:** a flag change arrives as a `ChangeTrackingEvent` on **both** the APM and the Browser application, on the `entity.guid` each subscription targets.
+- **New Relic to LaunchDarkly:** a `new-relic-v2` trigger, fired with the body New Relic's workflow sends, turns the flag off, and LaunchDarkly records that trigger as fired.
+- **The wiring** (when the demo project exists): the subscriptions are on, the rage-click alert, workflow, channel and destination exist, and the destination points at a trigger that still exists (it goes stale if the trigger is re-created).
+
+When `cgc-demo` and its flag exist it checks those, and puts the flag back the way it found it. When they do not (nothing set up yet, or torn down) it builds its own: a scratch project `nr-check-xxxxxx` with one flag, a throwaway trigger, and two temporary subscriptions named `<app> (check xxxxxx) [APM]` and `[Browser]` aimed at your real applications, and deletes them all afterwards. The only lasting trace is a few change events on those two applications, which New Relic keeps. `npm run check:newrelic:cleanup` only ever touches `nr-check-` projects and those subscription names; do not use `npm run teardown` for this, it removes the real demo too. The full alert path (rage clicks, issue, workflow) is `npm run incident -- --auto-remediation`; this is the quick check that the two integrations themselves work.
+
 ---
 
 ## Optional second flag scenario: gradual rollout
@@ -898,10 +919,10 @@ Finish with `terraform/main.tf`: "Everything you saw was created from code, in o
 npm test
 ```
 
-91 tests (Vitest, React Testing Library) covering:
+94 tests (Vitest, React Testing Library) covering:
 - **Release and remediate behaviour** (`CGCPrepLanding.test.jsx`): the flag gates the feature, the change listener subscribes and unsubscribes, re-identify with a stable persona key, the conversion metric, the bad-release switch with the error boundary, and the kill switch button.
 - **Flag explanations** (`FlagStatus.test.jsx`, `flagReason.js`).
-- **Model selection** (`server/llm.test.js`): OpenAI, Ollama, canned fallback, the local model mapping and warm-up. **New Relic wiring** (`scripts/newrelic-lib.test.js`): the entity lookup, the integration subscriptions, the webhook payload, the rage-click alert's signal, and the order teardown deletes things in. **Setup and teardown** (`scripts/setup-lib.test.js`): `.env` merging, Terraform output handling, and every LaunchDarkly API call for experiments and clean-up, against a fake server; the API token checks (`scripts/token.test.js`). The Terraform config is checked with `terraform validate`.
+- **Model selection** (`server/llm.test.js`): OpenAI, Ollama, canned fallback, the local model mapping and warm-up. **New Relic wiring** (`scripts/newrelic-lib.test.js`): the entity lookup, the integration subscriptions, the webhook payload, the rage-click alert's signal, the change-event query and trigger-id parsing the quick check uses, and the order teardown deletes things in. **Setup and teardown** (`scripts/setup-lib.test.js`): `.env` merging, Terraform output handling, and every LaunchDarkly API call for experiments and clean-up, against a fake server; the API token checks (`scripts/token.test.js`). The Terraform config is checked with `terraform validate`.
 - Personas, environment handling, and the canned replies.
 
 ---
@@ -966,6 +987,8 @@ scripts/
   simulate-traffic.mjs        synthetic experiment traffic
   simulate-incident.mjs       plays out a bad release: real browser sessions, rage clicks, kill switch
   newrelic.mjs, newrelic-lib.mjs  npm run newrelic: LaunchDarkly's New Relic integration, alert, automated kill switch
+  check-newrelic.mjs          npm run check:newrelic: quick API test of both New Relic integrations
+  check-newrelic-cleanup.mjs  npm run check:newrelic:cleanup: removes what that check leaves with --keep
 src/
   main.jsx                    LaunchDarkly provider (streaming, evaluation reasons)
   observability.js            New Relic browser agent

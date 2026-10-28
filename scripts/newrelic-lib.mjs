@@ -167,10 +167,28 @@ export const RAGE_CLICK_EXPIRATION = {
   openViolationOnExpiration: false,
 };
 
+// The change tracking events LaunchDarkly wrote for one flag in one environment (and project, when
+// given). One flag change arrives once per subscription, so two entities (APM and Browser) mean two
+// rows. launchdarklyAuditLogUrl ends in the id of the LaunchDarkly audit entry the event came from.
+export const changeEventsQuery = ({ project, flag, envKey, sinceMs }) =>
+  `SELECT entity.domain, entity.guid, description, launchdarklyAuditLogUrl FROM ChangeTrackingEvent WHERE featureFlagId = '${flag}' AND launchdarklyEnvironmentKey = '${envKey}'${project ? ` AND launchdarklyProjectKey = '${project}'` : ''} AND timestamp >= ${Number(sinceMs)} SINCE 1 hour ago LIMIT 20`;
+
+// What `npm run check:newrelic` makes in LaunchDarkly: a scratch project and two temporary
+// subscriptions. The cleanup script finds them again by these names, and nothing else.
+export const CHECK_PROJECT_PREFIX = 'nr-check-';
+export const checkSubscriptionLabel = (appName, project) => `${appName} (check ${project.slice(-6)})`;
+export function isCheckSubscription(name, project) {
+  const match = name?.match(/ \(check ([0-9a-f]{6})\) \[(APM|Browser)\]$/);
+  return Boolean(match) && (!project || match[1] === project.slice(-6));
+}
+
+// A trigger URL ends in /webhook/triggers/<id>/<secret>; the id is what the trigger list shows as _id.
+export const triggerIdFromUrl = (url) => url?.match(/\/webhook\/triggers\/([^/?#]+)/)?.[1];
+
 export const rageClickQuery = (appName) =>
   `SELECT uniqueCount(enduser.id) FROM UserAction WHERE rageClick = true AND appName = '${appName.replace(/'/g, "\\'")}'`;
 
-async function findCondition(nerdgraph, accountId) {
+export async function findCondition(nerdgraph, accountId) {
   const data = await nerdgraph(`query($id: Int!, $name: String) { actor { account(id: $id) { alerts {
     nrqlConditionsSearch(searchCriteria: { name: $name }) { nrqlConditions { id name policyId signal { fillOption } expiration { expirationDuration } } } } } } }`,
   { id: Number(accountId), name: ALERT_CONDITION_NAME });
@@ -222,7 +240,7 @@ const notificationsQuery = `query($acc: Int!) { actor { account(id: $acc) {
   }
   aiWorkflows { workflows { entities { id name workflowEnabled } } } } } }`;
 
-async function lookUp(nerdgraph, accountId) {
+export async function lookUp(nerdgraph, accountId) {
   const data = await nerdgraph(notificationsQuery, { acc: Number(accountId) });
   const account = data.actor.account;
   return {
