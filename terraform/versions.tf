@@ -4,7 +4,7 @@ terraform {
   required_providers {
     launchdarkly = {
       source  = "launchdarkly/launchdarkly"
-      version = "~> 3.0"
+      version = "~> 3.3"
     }
   }
 }

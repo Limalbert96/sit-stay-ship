@@ -100,7 +100,7 @@ export const ok = (status) => status >= 200 && status < 300;
 export const failed = (what, res) => ({ status: 'manual', detail: `${what} (LaunchDarkly answered ${res.status}: ${res.data?.message ?? 'no message'})` });
 
 // ---- Account-level integration subscriptions ------------------------------------------------
-// LaunchDarkly integrations (New Relic, Slack) are subscriptions on the account, not part of a
+// The LaunchDarkly New Relic integration is a subscription on the account, not part of a
 // project, so deleting a project leaves them behind. Ours carry the cgc-prep tag, whatever they are
 // named. A dry run (status 0) only reports.
 export async function tearDownSubscriptions({ api }, { integration, label }) {
@@ -119,12 +119,6 @@ export async function tearDownSubscriptions({ api }, { integration, label }) {
   }
   return results;
 }
-
-// The Slack subscription Terraform makes when SLACK_WEBHOOK_URL is set. Terraform forgets it when a
-// scratch project is deleted whole (its children are dropped from state first), so it is removed
-// here through the API instead.
-export const tearDownSlackSubscription = (ctx) =>
-  tearDownSubscriptions(ctx, { integration: 'slack', label: 'Slack' });
 
 // ---- AI Config default rule and experiments ------------------------------------------------
 // Each step returns { status: 'created' | 'exists' | 'manual', detail } and never throws, so

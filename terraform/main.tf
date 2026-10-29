@@ -1,6 +1,5 @@
 # Everything the demo needs in LaunchDarkly, as code: flags and their targeting, metrics, the
-# flag trigger (kill switch), the AI Config with its models and variations, and an optional
-# Slack subscription.
+# flag trigger (kill switch), and the AI Config with its models and variations.
 #
 # What Terraform does not manage, because the provider has no resource for it:
 #   - experiments, and the AI Config's default rule. `npm run setup` creates those through
@@ -304,28 +303,5 @@ resource "launchdarkly_ai_config_variation" "detailed" {
   messages = [{
     role    = "system"
     content = "You are an expert canine behaviorist specializing in the AKC Canine Good Citizen test. Explain the reasoning behind each test item and give step by step training advice."
-  }]
-}
-
-# ---------------------------------------------------------------------------------------
-# Optional Slack notifications for every flag change
-# ---------------------------------------------------------------------------------------
-
-resource "launchdarkly_audit_log_subscription" "slack" {
-  count = var.slack_webhook_url == "" ? 0 : 1
-
-  integration_key = "slack"
-  name            = "CGC Prep: flag changes in Slack"
-  on              = true
-  tags            = ["cgc-prep"]
-
-  config = {
-    url = var.slack_webhook_url
-  }
-
-  statements = [{
-    effect    = "allow"
-    actions   = ["*"]
-    resources = ["proj/${local.project_key}:env/*:flag/*"]
   }]
 }

@@ -99,13 +99,22 @@ export const tearDownNewRelicIntegration = (ctx) =>
 
 // ---- 2. New Relic alert and automated kill switch ------------------------------------------
 
-export function nerdGraphClient({ userKey, url = 'https://api.newrelic.com/graphql', fetchImpl = fetch }) {
+export function nerdGraphClient({ userKey, url = 'https://api.newrelic.com/graphql', fetchImpl = fetch, retryDelayMs = 1000 }) {
+  // A dropped connection (ECONNRESET during the TLS handshake, Wi-Fi blip, proxy) throws before there is
+  // any response, and is usually gone a second later, so those get two more tries. An HTTP error or a
+  // GraphQL error is an answer and is not retried.
+  const post = async (body) => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await fetchImpl(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'API-Key': userKey }, body });
+      } catch (err) {
+        if (attempt === 3) throw new Error(`could not reach New Relic (${err.cause?.code ?? err.message})`);
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+      }
+    }
+  };
   return async function nerdgraph(query, variables = {}) {
-    const res = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'API-Key': userKey },
-      body: JSON.stringify({ query, variables }),
-    });
+    const res = await post(JSON.stringify({ query, variables }));
     const body = await res.json().catch(() => ({}));
     // NerdGraph answers 200 with an "errors" array, so the status alone does not say it worked.
     if (!res.ok) throw new Error(`New Relic answered ${res.status}`);
@@ -114,18 +123,14 @@ export function nerdGraphClient({ userKey, url = 'https://api.newrelic.com/graph
   };
 }
 
-// What the trigger records in LaunchDarkly when New Relic fires it. A trigger's audit entry takes
-// the request's `eventName` ("<eventName> was triggered"), so flag history says which path turned
-// the flag off: this, or the page's manual kill switch (server/index.js sends its own eventName).
-export const AUTO_REMEDIATION_EVENT = 'New Relic auto-remediation: the rage-click alert opened an issue';
-
-// The webhook body New Relic sends. incident_url and condition_name are the fields LaunchDarkly's
-// New Relic trigger type suggests (New Relic fills them in per issue); eventName is the line above.
-// A New Relic payload template, not JSON: the {{ }} parts are filled in when the issue opens.
+// The webhook body New Relic sends. LaunchDarkly's New Relic trigger type accepts exactly these two
+// fields and rejects anything else (so no `eventName`: that is for the Generic trigger the page's
+// kill switch uses, see server/index.js). New Relic fills them in per issue; conditionName is a
+// list, so `.[0]` takes the first name. A New Relic payload template, not JSON: the {{ }} parts
+// are filled in when the issue opens.
 export const WEBHOOK_PAYLOAD = `{
-  "incident_url": {{ json issuePageUrl }},
-  "condition_name": {{ json accumulations.conditionName }},
-  "eventName": ${JSON.stringify(AUTO_REMEDIATION_EVENT)}
+  "condition_name": {{ json accumulations.conditionName.[0] }},
+  "incident_url": {{ json issuePageUrl }}
 }`;
 
 // The alert's signal. Two things have to both be true for the issue to close itself once the kill

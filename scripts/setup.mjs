@@ -2,7 +2,7 @@
 //
 //   1. Terraform creates everything in LaunchDarkly: the project (if it does not exist yet), flags
 //      with their targeting, the two metrics, the two flag triggers (the page's kill switch and New
-//      Relic's), the AI Config with its models, and Slack if SLACK_WEBHOOK_URL is set.
+//      Relic's), the AI Config with its models.
 //   2. The outputs (client-side ID, SDK key, trigger URL) are written into .env.
 //   3. The LaunchDarkly API (Terraform has no resource for these) sets the AI Config's default
 //      rule so the chatbot works, then creates and starts the two experiments. With NR_USER_KEY
@@ -39,7 +39,6 @@ const { values: args } = parseArgs({
   },
 });
 const dryRun = args['dry-run'];
-const slackWebhookUrl = process.env.SLACK_WEBHOOK_URL || '';
 
 const token = await getApiToken(); // from the shell or .env, or asked for in a terminal
 if (!token) {
@@ -64,7 +63,6 @@ const tfEnv = {
   ...process.env,
   LAUNCHDARKLY_ACCESS_TOKEN: token,
   TF_IN_AUTOMATION: '1',
-  ...(slackWebhookUrl && { TF_VAR_slack_webhook_url: slackWebhookUrl }),
 };
 const terraform = (tfArgs, options = {}) =>
   spawnSync('terraform', ['-chdir=terraform', ...tfArgs], { env: tfEnv, encoding: 'utf8', stdio: options.capture ? ['ignore', 'pipe', 'inherit'] : 'inherit' });
@@ -129,16 +127,23 @@ console.log('\n4. Local chatbot models (Ollama)');
 manual.push(...(await setupOllama({ install: args['install-ollama'], skipModels: args['skip-models'] })).manual);
 
 console.log('\nStill to do by hand:');
-if (slackWebhookUrl) console.log('  - Slack: flag changes post to your webhook. Change one flag to see the message.');
-else console.log('  - Slack (optional): put SLACK_WEBHOOK_URL in .env and run npm run setup again (README, Integrations, Slack).');
+console.log('  - Slack (optional): add LaunchDarkly\'s Slack app by hand (README, Integrations, Slack).');
 if (manual.length) {
   console.log('\nThese steps did not complete on their own, so do them by hand:');
   for (const m of manual) console.log(`  - ${m}`);
 }
 console.log('\nNext:');
 console.log('  1. Start the app:            npm run dev   (already running? Ctrl-C and start it again: it reads .env only at start)');
-if (!args['no-experiments']) {
-  console.log('  2. Generate experiment data (allow a few minutes for the Results tab to update):');
-  console.log('       npm run simulate -- --target flag --users 5000');
-  console.log('       npm run simulate -- --target ai --users 2000');
+const newRelicConfigured = Boolean(process.env.NR_USER_KEY && process.env.NR_ACCOUNT_ID);
+if (!args['no-experiments'] || newRelicConfigured) {
+  console.log('  2. Generate demo data (allow a few minutes for the Results tab to update):');
+  if (!args['no-experiments']) {
+    console.log('       npm run simulate -- --target flag --users 5000');
+    console.log('       npm run simulate -- --target ai --users 2000');
+  }
+  if (newRelicConfigured) {
+    console.log('     Or play out a bad release (about 8 minutes, needs the app running and Chrome):');
+    console.log('       npm run incident                        the script presses the kill switch');
+    console.log('       npm run incident -- --auto-remediation  New Relic\'s alert turns the flag off');
+  }
 }
