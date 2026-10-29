@@ -226,11 +226,10 @@ try {
   triggerId = triggerIdFromUrl(url);
 
   // The body New Relic's workflow sends (WEBHOOK_PAYLOAD in newrelic-lib.mjs), with the placeholders filled in.
-  const eventName = `Test script (npm run check:newrelic) at ${new Date().toISOString()}`;
   const fired = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ incident_url: 'https://one.newrelic.com/', condition_name: ALERT_CONDITION_NAME, eventName }),
+    body: JSON.stringify({ incident_url: 'https://one.newrelic.com/', condition_name: ALERT_CONDITION_NAME }),
   });
   check('trigger accepted the request', fired.ok, `status ${fired.status}`);
 
@@ -242,16 +241,16 @@ try {
   }, 30_000, 2000);
   check('LaunchDarkly recorded that trigger as fired', Boolean(after), after ? `integration ${after._integrationKey}` : `no _lastTriggeredAt on ${triggerId}`);
 
-  // The flag history carries the request's eventName; that entry's id is also in the link on the New Relic
+  // The New Relic trigger type takes no eventName, so the flag history entry is found by the trigger's id; that entry's id is also in the link on the New Relic
   // event, which is how we tell the trigger's change from the "turn on" above. Soft, because the exact
   // wording of the entry is LaunchDarkly's.
   const spec = encodeURIComponent(`proj/${project}:env/${envKey}:flag/${FLAG}`);
   const audit = await waitFor(async () => {
     const entries = (await api('GET', `/auditlog?after=${t0}&spec=${spec}&limit=20`)).data.items ?? [];
-    return entries.find((e) => JSON.stringify(e).includes(eventName));
+    return entries.find((e) => JSON.stringify(e).includes(triggerId));
   }, 30_000, 3000);
   if (audit) note('flag history', `"${(audit.title ?? audit.name ?? '').replace(/<[^>]+>/g, '')}"`);
-  else note('flag history', 'did not find the eventName in the audit log (look at the flag history by hand)');
+  else note('flag history', 'did not find the trigger in the audit log (look at the flag history by hand)');
 
   // ---- The other half: did New Relic hear about it? ------------------------------------------------------
   console.log(`\nWaiting up to ${args.timeout}s for the change events to reach New Relic`);

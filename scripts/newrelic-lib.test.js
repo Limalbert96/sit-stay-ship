@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  RAGE_CLICK_EXPIRATION, RAGE_CLICK_SIGNAL, WEBHOOK_PAYLOAD, CHECK_PROJECT_PREFIX, changeEventsQuery, checkSubscriptionLabel, entitySearchQuery, isCheckSubscription, triggerIdFromUrl, guidsFromSearch, rageClickQuery, stepNewRelicIntegration,
+  RAGE_CLICK_EXPIRATION, RAGE_CLICK_SIGNAL, WEBHOOK_PAYLOAD, CHECK_PROJECT_PREFIX, changeEventsQuery, checkSubscriptionLabel, entitySearchQuery, nerdGraphClient, isCheckSubscription, triggerIdFromUrl, guidsFromSearch, rageClickQuery, stepNewRelicIntegration,
   tearDownNewRelicAlerting, subscriptionBody, tearDownNewRelicIntegration,
 } from './newrelic-lib.mjs';
 
@@ -137,10 +137,10 @@ describe('tearDownNewRelicAlerting', () => {
 });
 
 describe('WEBHOOK_PAYLOAD', () => {
-  it('sends the fields LaunchDarkly\'s New Relic trigger suggests, plus the eventName flag history shows', () => {
+  it('sends only the two fields LaunchDarkly\'s New Relic trigger accepts', () => {
+    expect(WEBHOOK_PAYLOAD).toContain('"condition_name": {{ json accumulations.conditionName.[0] }}');
     expect(WEBHOOK_PAYLOAD).toContain('"incident_url": {{ json issuePageUrl }}');
-    expect(WEBHOOK_PAYLOAD).toContain('"condition_name": {{ json accumulations.conditionName }}');
-    expect(WEBHOOK_PAYLOAD).toContain('"eventName": "New Relic auto-remediation: the rage-click alert opened an issue"');
+    expect(WEBHOOK_PAYLOAD).not.toContain('eventName');
   });
 });
 
@@ -197,5 +197,28 @@ describe('check subscriptions', () => {
     expect(isCheckSubscription(`${label} [APM]`, 'nr-check-ffffff')).toBe(false);
     expect(isCheckSubscription('Canine Good Citizen [APM]')).toBe(false);
     expect(isCheckSubscription(undefined)).toBe(false);
+  });
+});
+
+describe('nerdGraphClient', () => {
+  const answer = (body, status = 200) => ({ ok: status < 400, status, json: async () => body });
+  const dropped = () => Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
+
+  it('tries again when the connection drops, then returns the data', async () => {
+    const fetchImpl = vi.fn().mockRejectedValueOnce(dropped()).mockResolvedValueOnce(answer({ data: { ok: 1 } }));
+    expect(await nerdGraphClient({ userKey: 'k', fetchImpl, retryDelayMs: 0 })('{ x }')).toEqual({ ok: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('gives up after three dropped connections and says what happened', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(dropped());
+    await expect(nerdGraphClient({ userKey: 'k', fetchImpl, retryDelayMs: 0 })('{ x }')).rejects.toThrow('could not reach New Relic (ECONNRESET)');
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry an answer, even a bad one', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(answer({ errors: [{ message: 'nope' }] }));
+    await expect(nerdGraphClient({ userKey: 'k', fetchImpl, retryDelayMs: 0 })('{ x }')).rejects.toThrow('nope');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
