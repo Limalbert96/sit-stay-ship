@@ -74,7 +74,7 @@ export async function getApiToken({ envPath = '.env' } = {}) {
   if (!process.stdin.isTTY) return '';
 
   console.log(`LaunchDarkly API access token needed (only for setup and teardown; the app never uses it).
-Create one in LaunchDarkly: Account settings, Authorization, Access tokens, Create token, role Writer.
+Create one in LaunchDarkly: Account settings, Authorization, Access tokens, Create token, role Admin (setup creates the project; Writer is enough once it exists).
 It starts with "api-". Your input is hidden.
 `);
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -86,7 +86,7 @@ It starts with "api-". Your input is hidden.
     }
     const check = await verifyToken(token);
     if (!check.valid) {
-      console.log('  LaunchDarkly rejected that token. Check that you copied all of it and that its role is Writer.');
+      console.log('  LaunchDarkly rejected that token. Check that you copied all of it and that its role is Admin (or Writer, if the project already exists).');
       continue;
     }
     console.log(check.unchecked ? '  (could not reach LaunchDarkly to check it, continuing)' : `  Token accepted${check.who ? ` (${check.who})` : ''}.`);
@@ -107,7 +107,7 @@ It starts with "api-". Your input is hidden.
 export const TOKEN_HELP = `LD_API_TOKEN is not set.
 
 Create an API access token in LaunchDarkly (Account settings, Authorization, Access tokens,
-Create token, role Writer), then either run this in a terminal and paste it when asked, or:
+Create token, role Admin), then either run this in a terminal and paste it when asked, or:
 
   export LD_API_TOKEN=api-xxxxxxxx
 `;
