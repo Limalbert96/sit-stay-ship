@@ -1,6 +1,6 @@
 # Manual setup (instead of the script)
 
-`npm run setup` does all of this for you. Use this page only if you prefer clicking through LaunchDarkly by hand, or a setup step reported `[!]`. The environment variables are in the [README](../README.md#environment-variables-env).
+`npm run setup` does all of this for you. Use this page only if you prefer clicking through LaunchDarkly by hand, or a setup step reported `[!]`. The environment variables are in the [README](setup-details.md#environment-variables-env).
 
 ### Create the feature flags
 
@@ -53,7 +53,7 @@ The trigger belongs to one flag *in one environment*. In LaunchDarkly:
 2. Click the three-dot (overflow) menu next to the environment name (for example *Test*) and choose **Configuration in environment**.
 3. In the **Triggers** section click **+ Add trigger**. Trigger type **Generic trigger**, action **Turn flag off**, **Save trigger**.
 4. **Copy the trigger URL now.** LaunchDarkly shows it only once (you can regenerate it from the trigger's overflow menu). Paste it into `.env` as `LD_TRIGGER_URL`. Anyone holding the URL can turn the flag off, so keep it private.
-5. For [automated remediation](../README.md#automated-remediation-let-new-relic-pull-the-kill-switch-itself), add a second trigger the same way with trigger type **New Relic** (not *New Relic [Deprecated]*), and put its URL in New Relic's webhook destination. `npm run setup` does both for you.
+5. For [automated remediation](integrations.md#automated-remediation-let-new-relic-pull-the-kill-switch-itself), add a second trigger the same way with trigger type **New Relic** (not *New Relic [Deprecated]*), and put its URL in New Relic's webhook destination. `npm run setup` does both for you.
 
 The "Add adaptive trigger" button you see on individual targeting rules is a different feature.
 
@@ -66,11 +66,11 @@ curl -X POST "https://app.launchdarkly.com/api/v2/flags/cgc-demo/premium-video-t
 # the New Relic one: the same call with "integrationKey": "new-relic-v2"
 ```
 
-Flag triggers are only available on certain plans (the API reference says Enterprise). A free trial includes them. If your account has no **Triggers** section, use the fallback under [Release and remediate](../README.md#release-and-remediate).
+Flag triggers are only available on certain plans (the API reference says Enterprise). A free trial includes them. If your account has no **Triggers** section, use the fallback under [Release and remediate](walkthrough.md#release-and-remediate).
 
 ### Create the AI Config
 
-See [AI Configs](../README.md#ai-configs).
+See [AI Configs](walkthrough.md#ai-configs).
 
 ### Other `curl` equivalents (optional)
 
